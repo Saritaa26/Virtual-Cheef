@@ -1,0 +1,772 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
+<title>MedVR Biomédico</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@500&display=swap" rel="stylesheet">
+<script src="https://aframe.io/releases/1.7.0/aframe.min.js"></script>
+<style>
+/* ============================================================
+   TOKENS DE DISEÑO
+   Paleta: laboratorio clínico nocturno. Fondo azul-tinta profundo,
+   superficie de panel translúcida, acento teal quirúrgico para
+   estados activos, acento rojo-alerta solo para lo crítico (DEA).
+   Tipografía: Space Grotesk (títulos, técnico/distintivo) +
+   IBM Plex Sans (cuerpo, legible en pantallas clínicas) +
+   IBM Plex Mono (datos/estado, como un monitor de signos vitales).
+   ============================================================ */
+:root{
+ --bg:#0A1A22;
+ --surface:#0F2530;
+ --surface-2:#153240;
+ --line:#2A4B57;
+ --teal:#3FD8C4;
+ --teal-dim:#1F6E63;
+ --alert:#E1584B;
+ --text:#EAF3F2;
+ --text-dim:#8FADB2;
+ --radius:14px;
+}
+*{box-sizing:border-box}
+html,body{margin:0;width:100%;height:100%;overflow:hidden;background:var(--bg);color:var(--text);font-family:'IBM Plex Sans',sans-serif}
+h1,h2,h3{font-family:'Space Grotesk',sans-serif;margin:0}
+button{border:0;cursor:pointer;font-family:'IBM Plex Sans',sans-serif}
+button:active{transform:scale(.97)}
+
+#panel{
+ position:fixed;z-index:30;left:14px;top:14px;
+ width:min(400px,calc(100vw - 28px));max-height:calc(100vh - 28px);overflow:auto;
+ background:linear-gradient(180deg,rgba(15,37,48,.94),rgba(10,26,34,.94));
+ border:1px solid var(--line);border-radius:var(--radius);
+ padding:18px;backdrop-filter:blur(14px);
+ box-shadow:0 20px 50px rgba(0,0,0,.5);
+}
+#panel h1{font-size:20px;font-weight:600;letter-spacing:.2px}
+#panel h1 .dot{display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--teal);margin-right:9px;box-shadow:0 0 10px var(--teal)}
+.tagline{font-size:12.5px;color:var(--text-dim);margin:4px 0 16px;line-height:1.5}
+
+.device-grid{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+.device{
+ background:var(--surface-2);color:var(--text);border:1px solid var(--line);border-radius:10px;
+ padding:11px 10px;font-size:13px;font-weight:500;text-align:left;
+ display:flex;align-items:center;gap:9px;transition:border-color .15s,background .15s;
+}
+.device .ico{width:9px;height:9px;border-radius:2px;background:var(--text-dim);flex-shrink:0}
+.device.active{background:var(--teal-dim);border-color:var(--teal)}
+.device.active .ico{background:var(--teal)}
+
+.tabs{display:grid;grid-template-columns:repeat(4,1fr);gap:6px;margin-top:14px}
+.tab{background:transparent;color:var(--text-dim);border:1px solid var(--line);border-radius:9px;padding:9px 4px;font-size:11.5px;font-weight:500}
+.tab.active{background:var(--surface-2);color:var(--teal);border-color:var(--teal)}
+
+.content{margin-top:12px;background:var(--surface);border:1px solid var(--line);border-radius:10px;padding:13px 14px;font-size:13.5px;line-height:1.55}
+.content h3{font-size:14px;margin:0 0 8px;color:var(--teal)}
+.content p{margin:0}
+.content ul{padding-left:18px;margin:0;display:flex;flex-direction:column;gap:6px}
+
+#status{margin-top:12px;font-family:'IBM Plex Mono',monospace;font-size:11px;color:var(--text-dim);letter-spacing:.2px}
+
+#controls{position:fixed;z-index:31;right:14px;top:14px;display:flex;gap:8px;flex-wrap:wrap;justify-content:flex-end;max-width:54vw}
+#controls button{background:var(--surface-2);color:var(--text);border:1px solid var(--line);border-radius:9px;padding:9px 12px;font-size:12.5px;font-weight:500}
+#voice.on{border-color:var(--teal);color:var(--teal)}
+#mic.listening{border-color:var(--alert);color:var(--alert);animation:pulse 1s infinite}
+#vrbtn,#arbtn{background:var(--teal);color:#04211C;font-weight:600;border-color:var(--teal)}
+#arbtn{background:transparent;color:var(--teal)}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.45}}
+#transcript{position:fixed;z-index:31;left:50%;bottom:70px;transform:translateX(-50%);background:rgba(10,26,34,.92);border:1px solid var(--teal);border-radius:10px;padding:8px 14px;font-size:12px;color:var(--teal);max-width:80vw;text-align:center}
+
+#hint{position:fixed;z-index:20;bottom:14px;left:50%;transform:translateX(-50%);background:rgba(10,26,34,.9);border:1px solid var(--line);border-radius:10px;padding:8px 14px;font-size:11.5px;color:var(--text-dim);text-align:center;max-width:90vw}
+.hidden{display:none!important}
+
+/* Modo Cartón: divisor central para alinear el celular dentro de las gafas,
+   y un botón de salida duplicado (uno por cada ojo, izquierdo y derecho)
+   porque en modo estéreo cada mitad de la pantalla se ve por separado. */
+#cardboard-divider{position:fixed;z-index:35;top:0;left:50%;width:1px;height:100%;background:rgba(255,255,255,.18);pointer-events:none;display:none}
+#cardboard-exit{position:fixed;z-index:40;top:0;left:0;width:100%;height:100%;pointer-events:none;display:none}
+#cardboard-exit button{position:absolute;top:16px;transform:translateX(-50%);pointer-events:auto;background:var(--surface-2);color:var(--text);border:1px solid var(--teal);border-radius:9px;padding:8px 12px;font-size:12px}
+#cardboard-exit .btn-l{left:25%}
+#cardboard-exit .btn-r{left:75%}
+body.cardboard-on #panel,body.cardboard-on #hint,body.cardboard-on #controls{display:none!important}
+body.cardboard-on #cardboard-divider,body.cardboard-on #cardboard-exit{display:block}
+
+@media(max-width:640px){
+ #panel{left:8px;top:8px;width:calc(100vw - 16px);max-height:56vh;padding:14px}
+ #controls{right:8px;top:auto;bottom:9px;max-width:96vw}
+ #hint{bottom:52px}
+ .tagline{margin-bottom:12px}
+}
+</style>
+</head>
+<body>
+
+<div id="ui-overlay">
+<div id="panel">
+ <h1><span class="dot"></span>MedVR Biomédico</h1>
+ <div class="tagline">Laboratorio virtual de equipos biomédicos — funcionamiento, mantenimiento y seguridad.</div>
+
+ <div class="device-grid" id="devices">
+  <button class="device" data-k="dea"><span class="ico"></span>DEA</button>
+  <button class="device" data-k="tens"><span class="ico"></span>Tensiómetro</button>
+  <button class="device" data-k="glu"><span class="ico"></span>Glucómetro</button>
+  <button class="device" data-k="bomba"><span class="ico"></span>Bomba de infusión</button>
+ </div>
+
+ <div class="tabs">
+  <button class="tab active" data-tab="func">Funcionamiento</button>
+  <button class="tab" data-tab="mant">Mantenimiento</button>
+  <button class="tab" data-tab="fallas">Fallas</button>
+  <button class="tab" data-tab="seg">Seguridad</button>
+ </div>
+
+ <div id="content" class="content"></div>
+ <div id="status">Selecciona un equipo para comenzar.</div>
+</div>
+
+<div id="controls">
+ <button onclick="togglePanel()">Panel</button>
+ <button onclick="rotateModel()">Girar</button>
+ <button onclick="explodeModel()">Piezas</button>
+ <button onclick="resetModel()">Restablecer</button>
+ <button id="voice" onclick="toggleVoice()">Voz: ON</button>
+ <button id="mic" onclick="listenOnce()">🎤 Preguntar</button>
+ <button id="openbtn" onclick="toggleOpen()">Abrir</button>
+ <button id="vrbtn" onclick="enterVR()">Entrar en VR</button>
+ <button id="cardboardbtn" onclick="enterCardboard()">🥽 Modo Cartón</button>
+ <button id="arbtn" onclick="enterAR()">Ver mis manos (RA)</button>
+</div>
+<div id="hint">En PC: mouse para mirar. En celular: mueve el teléfono. Con gafas de cartón/plástico usa "Modo Cartón" para dividir la pantalla en dos. En gafas con "Ver mis manos (RA)" pellizca (pulgar + índice) cualquier pieza para moverla, o el equipo completo si no tocas una pieza suelta.</div>
+<div id="transcript" class="hidden"></div>
+</div>
+
+<div id="cardboard-divider"></div>
+<div id="cardboard-exit">
+ <button class="btn-l" onclick="exitCardboard()">✕ Salir</button>
+ <button class="btn-r" onclick="exitCardboard()">✕ Salir</button>
+</div>
+
+<a-scene renderer="colorManagement:true;physicallyCorrectLights:true;antialias:true;highRefreshRate:true" shadow="type:pcfsoft" vr-mode-ui="enabled:true" embedded background="color:#0A1A22" webxr="optionalFeatures: hand-tracking, dom-overlay; overlayElement: #ui-overlay;">
+ <a-entity light="type:ambient;intensity:0.55;color:#8FB4C2"></a-entity>
+ <a-entity light="type:directional;intensity:2.4;color:#FFF9EE;castShadow:true;shadowCameraLeft:-1;shadowCameraRight:1;shadowCameraTop:1;shadowCameraBottom:-1;shadowCameraNear:0.3;shadowCameraFar:4;shadowMapHeight:1024;shadowMapWidth:1024" position="-1.4 2.4 0.4"></a-entity>
+ <a-entity light="type:directional;intensity:0.5;color:#3FD8C4" position="1.2 0.4 -2"></a-entity>
+ <a-entity light="type:point;intensity:0.9;color:#3FD8C4;distance:3" position="0 1.6 -0.4"></a-entity>
+
+ <!-- anillo de vitrina bajo el equipo -->
+ <a-torus position="0 0.62 -0.95" rotation="90 0 0" radius="0.42" radius-tubular="0.004" color="#3FD8C4" material="emissive:#3FD8C4;emissiveIntensity:0.7;shader:flat"></a-torus>
+
+ <a-entity id="model" position="0 1.3 -0.95" rotation="0 15 0" scale="1.15 1.15 1.15"></a-entity>
+
+ <a-camera position="0 1.6 0"><a-cursor color="#3FD8C4"></a-cursor></a-camera>
+
+ <!-- Manos: sin malla visible (en RA se ve la mano real por passthrough).
+      Solo se usan para detectar el gesto de pellizco y su posición. -->
+ <a-entity id="handLeft" hand-tracking-controls="hand: left; modelStyle: dots;" visible="false"></a-entity>
+ <a-entity id="handRight" hand-tracking-controls="hand: right; modelStyle: dots;" visible="false"></a-entity>
+
+ <a-plane rotation="-90 0 0" width="30" height="30" color="#0D1F27" shadow="receive:true" class="ar-hide"></a-plane>
+ <a-sky color="#0A1A22" class="ar-hide"></a-sky>
+</a-scene>
+
+<script>
+/* ============================================================
+   CONTENIDO EDUCATIVO (Funcionamiento / Mantenimiento / Fallas / Seguridad)
+   ============================================================ */
+const data = {
+dea:{
+ name:"DEA / Desfibrilador externo automático",
+ func:"El DEA analiza el ritmo cardíaco mediante los electrodos. Si detecta un ritmo que requiere descarga, indica al operador que se aleje y permite administrar el choque. Después continúa analizando el ritmo.",
+ mant:["Revisar carcasa, pantalla, botones y conectores.","Comprobar estado/carga de la batería según el fabricante.","Revisar cables y electrodos; no usar electrodos dañados o vencidos.","Realizar las pruebas internas y autodiagnóstico indicados por el fabricante."],
+ fallas:["No enciende: batería descargada, mal contacto o daño de alimentación.","No reconoce electrodos: cable/conector o electrodos defectuosos.","No carga o no permite descarga: batería, circuito de carga o condición de seguridad.","Avisos repetidos de error: revisar registro de eventos y servicio técnico."],
+ seg:["Seguir las indicaciones de voz/pantalla.","No tocar al paciente durante el análisis o la descarga.","Usar electrodos adecuados y colocarlos sobre piel seca según el esquema del equipo.","El mantenimiento interno y las reparaciones eléctricas deben hacerlas personal capacitado."]
+},
+tens:{
+ name:"Tensiómetro digital",
+ func:"El brazalete se infla y comprime temporalmente la arteria. Al desinflarse, el sensor detecta las variaciones de presión y el equipo calcula presión sistólica, diastólica y pulso.",
+ mant:["Revisar brazalete, tubo y conectores.","Limpiar las superficies externas sin mojar el interior.","Comprobar que no haya fugas en el sistema neumático.","Verificar batería y realizar controles de precisión/calibración según el fabricante."],
+ fallas:["Lecturas erráticas: movimiento, mala posición del brazalete o fuga de aire.","No infla: bomba, válvula, tubo o conector.","Se desinfla muy rápido: posible fuga.","No enciende: batería o alimentación."],
+ seg:["Colocar el brazalete del tamaño correcto.","Mantener al paciente quieto y con el brazo apoyado.","No apretar excesivamente el tubo ni doblarlo.","No usar un equipo que presente daño físico evidente."]
+},
+glu:{
+ name:"Glucómetro",
+ func:"Una gota de sangre entra en la tira reactiva. El glucómetro mide una reacción electroquímica y muestra una estimación de glucosa en sangre.",
+ mant:["Mantener limpio el puerto de tiras.","Guardar las tiras cerradas y respetar su fecha de vencimiento.","Revisar batería y pantalla.","Usar controles de calidad cuando estén indicados por el fabricante."],
+ fallas:["Error de tira: tira vencida, dañada, mal colocada o muestra insuficiente.","No enciende: batería o contactos.","Resultado inesperado: revisar tira, muestra, almacenamiento y procedimiento.","No reconoce la tira: puerto o tira con problemas."],
+ seg:["Usar una tira nueva y compatible con el modelo.","No reutilizar lancetas ni tiras.","Desechar material con sangre en el recipiente correspondiente.","No alterar el resultado ni usarlo como diagnóstico aislado sin contexto."]
+},
+bomba:{
+ name:"Bomba de infusión",
+ func:"La bomba controla el paso de una solución mediante un mecanismo que mueve el tubo de manera controlada. El usuario programa parámetros como velocidad y volumen, y el equipo vigila condiciones de alarma.",
+ mant:["Revisar carcasa, teclado, pantalla, puerta y mecanismo.","Inspeccionar el tubo y el recorrido por el mecanismo de bombeo.","Limpiar según el protocolo del fabricante.","Realizar pruebas de funcionamiento, alarmas y precisión en los intervalos establecidos."],
+ fallas:["Alarma de oclusión: tubo doblado, obstrucción o presión elevada.","Alarma de aire: presencia de aire o sensor con problema.","No entrega el flujo esperado: tubo mal instalado, mecanismo o configuración.","No enciende: batería o alimentación."],
+ seg:["Programar y verificar los parámetros antes de iniciar la infusión.","Comprobar el recorrido correcto del tubo.","No ignorar alarmas.","Las pruebas de precisión y reparaciones deben realizarse con procedimientos de mantenimiento biomédico."]
+}
+};
+
+let currentKey="dea", currentTab="func", voiceOn=true, exploded=false;
+let grabbedBy=null, grabbedEl=null, grabOffset={x:0,y:0,z:0};
+
+/* ============================================================
+   NARRACIÓN CONVERSACIONAL
+   Lo que dice la voz NO es una lectura de las viñetas en pantalla:
+   son frases naturales, más cortas, y cada una termina invitando
+   al usuario a decidir el siguiente paso (por botón o por voz).
+   ============================================================ */
+const narration = {
+dea:{
+ greet:"Este es el desfibrilador externo automático, el DEA. Es el equipo que se usa cuando el corazón deja de latir de forma efectiva.",
+ func:"Cuando lo enciendes, te va guiando paso a paso: te pide poner los electrodos y, mientras tanto, analiza el ritmo del corazón. Si hace falta una descarga, te avisa que te alejes antes de aplicarla.",
+ mant:"Lo más importante es la batería: si está vencida, el equipo no sirve en una emergencia. Los electrodos también vencen, así que hay que revisarles la fecha.",
+ fallas:"Si no enciende, casi siempre es la batería. Si no reconoce los electrodos, revisa el cable o si están vencidos.",
+ seg:"Nunca toques al paciente mientras el equipo está analizando o dando la descarga.",
+ next:{func:"mant",mant:"fallas",fallas:"seg",seg:null}
+},
+tens:{
+ greet:"Este es el tensiómetro digital, para medir la presión arterial.",
+ func:"El brazalete se infla y aprieta la arteria por un momento. Cuando se desinfla, el sensor lee esos cambios de presión y calcula la sistólica, la diastólica y el pulso.",
+ mant:"Cuida sobre todo el brazalete y el tubo: que no tengan fugas de aire. Y de vez en cuando conviene comprobar que la medida siga siendo precisa.",
+ fallas:"Si las lecturas salen raras, casi siempre es porque el paciente se movió o el brazalete quedó mal puesto.",
+ seg:"Usa siempre el tamaño de brazalete correcto y deja al paciente quieto con el brazo apoyado.",
+ next:{func:"mant",mant:"fallas",fallas:"seg",seg:null}
+},
+glu:{
+ greet:"Este es el glucómetro, para medir la glucosa en sangre.",
+ func:"Una gota de sangre entra en la tira reactiva, y el equipo mide una reacción química para estimar cuánta glucosa hay.",
+ mant:"Guarda las tiras cerradas y revisa que no estén vencidas; eso es lo que más afecta el resultado.",
+ fallas:"Si marca error de tira, revisa que no esté vencida, dañada o mal puesta.",
+ seg:"Nunca reutilices lancetas ni tiras, y desecha todo lo que tuvo contacto con sangre en el lugar correcto.",
+ next:{func:"mant",mant:"fallas",fallas:"seg",seg:null}
+},
+bomba:{
+ greet:"Esta es la bomba de infusión, controla el paso de líquidos hacia el paciente.",
+ func:"Tú programas la velocidad y el volumen, y la bomba mueve el tubo de forma controlada mientras vigila que no haya problemas.",
+ mant:"Revisa el tubo y el mecanismo por donde pasa; ahí es donde más se desgasta con el uso.",
+ fallas:"Una alarma de oclusión casi siempre es un tubo doblado o algo obstruyendo el paso.",
+ seg:"Nunca ignores una alarma, y siempre verifica los parámetros antes de iniciar la infusión.",
+ next:{func:"mant",mant:"fallas",fallas:"seg",seg:null}
+}
+};
+const tabQuestion = {
+ func:"¿te cuento cómo mantenerlo?",
+ mant:"¿quieres saber qué fallas puede tener?",
+ fallas:"¿repasamos la seguridad?",
+ seg:"¿quieres ver otro equipo?"
+};
+
+/* ============================================================
+   MODELOS 3D PROCEDURALES
+   Cada dispositivo se construye con primitivas de A-Frame
+   (sin depender de archivos .glb externos). Cada pieza se marca
+   con data-base para poder "explotarla" y luego restablecerla.
+   ============================================================ */
+function addPart(parent, tag, attrs, grabbable){
+ const el = document.createElement(tag);
+ for(const k in attrs) el.setAttribute(k, attrs[k]);
+ if(tag!=="a-text") el.setAttribute("shadow","cast:true;receive:true");
+ if(grabbable) el.classList.add("grabbable");
+ parent.appendChild(el);
+ return el;
+}
+
+// "Bumper" de dos tonos + esferas en las esquinas: rompe la silueta de
+// caja perfecta y da sensación de plástico moldeado con borde de goma.
+function caseBox(parent, {w,h,d,x=0,y=0,z=0,color,trim,rough=0.55}){
+ const outer = addPart(parent,"a-box",{position:`${x} ${y} ${z}`,width:w+0.025,height:h+0.02,depth:d+0.025,color:trim,roughness:0.9,metalness:0.05});
+ const inner = addPart(parent,"a-box",{position:`${x} ${y} ${z+0.006}`,width:w,height:h,depth:d,color:color,roughness:rough,metalness:0.08});
+ const r=0.018;
+ [[-1,-1],[1,-1],[-1,1],[1,1]].forEach(([sx,sy])=>{
+  addPart(parent,"a-sphere",{position:`${x+sx*w/2} ${y+sy*h/2} ${z+d/2}`,radius:r,color:trim,roughness:0.9});
+ });
+ return {outer,inner,frontZ:z+d/2};
+}
+// Pantalla con bisel real (marco al ras + panel oscuro hundido): da
+// profundidad de verdad en vez de una calcomanía plana sobre la caja.
+function screenPanel(parent,{x=0,y,frontZ,w,h,caseColor,label,sub}){
+ addPart(parent,"a-box",{position:`${x} ${y} ${frontZ-0.003}`,width:w+0.024,height:h+0.024,depth:0.01,color:caseColor,roughness:0.5});
+ addPart(parent,"a-box",{position:`${x} ${y} ${frontZ-0.014}`,width:w,height:h,depth:0.01,color:"#0A1A20",roughness:0.25,metalness:0.15});
+ if(label) addPart(parent,"a-text",{position:`${x} ${y+h*0.16} ${frontZ-0.007}`,value:label,align:"center",color:"#3FD8C4",width:w*3.4});
+ if(sub) addPart(parent,"a-text",{position:`${x} ${y-h*0.2} ${frontZ-0.007}`,value:sub,align:"center",color:"#7FA0A6",width:w*2.4});
+ return frontZ-0.007;
+}
+function screwRow(parent,y,z,w,color){
+ [-1,1].forEach(s=>addPart(parent,"a-cylinder",{position:`${s*w/2} ${y} ${z}`,radius:"0.008",height:"0.006",rotation:"90 0 0",color:color||"#3A3A38",metalness:0.6,roughness:0.4}));
+}
+
+const openHooks = {};
+
+function buildDEA(root){
+ const body = addPart(root,"a-entity",{position:"0 0 0"},true);
+ const cb = caseBox(body,{w:0.62,h:0.44,d:0.5,color:"#F7CB3C",trim:"#C98F14"});
+ screenPanel(body,{y:0.09,frontZ:cb.frontZ,w:0.4,h:0.19,caseColor:"#C98F14",label:"",sub:""});
+ addPart(body,"a-text",{position:"-0.16 0.14 "+(cb.frontZ-0.007),value:"DEA",align:"left",color:"#3FD8C4",width:"1.6"});
+ // línea de ECG que barre la pantalla, como si estuviera analizando en vivo
+ const ecg = addPart(body,"a-entity",{position:`0 0.075 ${cb.frontZ-0.006}`});
+ addPart(ecg,"a-plane",{position:"0 0 0",width:"0.34",height:"0.006",color:"#123840"});
+ const blip = addPart(ecg,"a-plane",{position:"-0.17 0 0.001",width:"0.03",height:"0.05",color:"#37E27A",material:"shader:flat"});
+ blip.setAttribute("animation__scan","property:position;from:-0.17 0 0.001;to:0.17 0 0.001;dur:1800;loop:true;easing:linear");
+ addPart(body,"a-text",{position:"0 0.035 "+(cb.frontZ-0.006),value:"ANALIZANDO RITMO...",align:"center",color:"#8FADB2",width:"0.85"});
+ const led = addPart(body,"a-sphere",{position:"0.17 0.185 "+(cb.frontZ-0.002),radius:"0.012",color:"#37E27A",emissive:"#37E27A","emissive-intensity":"0.9"});
+ led.setAttribute("animation__pulse","property:material.emissiveIntensity;dir:alternate;dur:900;loop:true;to:0.2");
+ // rejilla de altavoz
+ for(let i=-2;i<=2;i++) addPart(body,"a-cylinder",{position:`${i*0.02} 0.19 ${cb.frontZ-0.002}`,radius:"0.006",height:"0.005",rotation:"90 0 0",color:"#8A6410"});
+ // asa superior
+ addPart(body,"a-torus",{position:"0 0.25 0",rotation:"90 0 0",radius:"0.16","radius-tubular":"0.013",color:"#2A2A28",roughness:0.7});
+ // botón de descarga con bisel
+ addPart(body,"a-cylinder",{position:"0.2 -0.06 "+(cb.frontZ),radius:"0.052",height:"0.012",color:"#8A6410"});
+ addPart(body,"a-cylinder",{position:"0.2 -0.06 "+(cb.frontZ+0.008),radius:"0.042",height:"0.014",color:"#E1584B",roughness:0.5});
+ addPart(body,"a-text",{position:"0.2 -0.06 "+(cb.frontZ+0.016),rotation:"0 0 0",value:"⚡",align:"center",color:"#2A0B08",width:"0.5"});
+ screwRow(body,-0.19,cb.frontZ,0.55);
+ // placa
+ addPart(body,"a-text",{position:"0 -0.19 "+(cb.frontZ-0.001),value:"MedVR · Uso educativo",align:"center",color:"#5A4413",width:"0.7"});
+
+ // --- compartimiento de electrodos (puerta con bisagra) ---
+ const hinge = addPart(root,"a-entity",{position:"0 -0.22 0.24"},false);
+ hinge.classList.add("hinge");
+ hinge.dataset.closedRot="0 0 0"; hinge.dataset.openRot="-115 0 0";
+ addPart(hinge,"a-box",{position:"0 -0.045 0.02",width:"0.5",height:"0.09",depth:"0.02",color:"#D9A61A",roughness:0.6});
+ addPart(hinge,"a-text",{position:"0 -0.045 0.031",value:"ELECTRODOS",align:"center",color:"#5A4413",width:"0.55"});
+
+ // parches (agarrables por separado, ocultos hasta abrir la puerta)
+ [-0.14,0.14].forEach(sx=>{
+  const pad = addPart(root,"a-entity",{position:`${sx} -0.18 0.1`,visible:"false"},true);
+  pad.classList.add("aed-pad");
+  addPart(pad,"a-box",{width:"0.16",height:"0.2",depth:"0.012",color:"#EDE7D8",roughness:0.75});
+  addPart(pad,"a-circle",{position:"0 0 0.007",radius:"0.045",color:"#C7BFA6"});
+  addPart(pad,"a-circle",{position:"0 0 0.008",radius:"0.018",color:"#3FD8C4"});
+ });
+ openHooks.dea = (isOpen)=>{ document.querySelectorAll("#model .aed-pad").forEach(p=>p.setAttribute("visible",isOpen)); };
+}
+
+function buildTens(root){
+ const body = addPart(root,"a-entity",{position:"0.3 0 0"},true);
+ const cb = caseBox(body,{w:0.32,h:0.38,d:0.13,color:"#EFF2F2",trim:"#C7CFCF",rough:0.4});
+ screenPanel(body,{y:0.1,frontZ:cb.frontZ,w:0.22,h:0.13,caseColor:"#C7CFCF"});
+ addPart(body,"a-text",{position:"0 0.135 "+(cb.frontZ-0.007),value:"120/80",align:"center",color:"#3FD8C4",width:"1.0"});
+ const pulseTxt = addPart(body,"a-text",{position:"0 0.075 "+(cb.frontZ-0.007),value:"PUL 72",align:"center",color:"#8FADB2",width:"0.6"});
+ pulseTxt.setAttribute("animation__blink","property:material.opacity;dir:alternate;dur:700;loop:true;to:0.35");
+ addPart(body,"a-cylinder",{position:"-0.08 -0.13 "+cb.frontZ,radius:"0.026",height:"0.012",color:"#3FD8C4"});
+ addPart(body,"a-cylinder",{position:"0.08 -0.13 "+cb.frontZ,radius:"0.026",height:"0.012",color:"#E1584B"});
+ screwRow(body,-0.17,cb.frontZ-0.005,0.28);
+
+ // puerta de baterías en la parte trasera
+ const hinge = addPart(root,"a-entity",{position:"0.3 0.02 -0.066"});
+ hinge.classList.add("hinge"); hinge.dataset.closedRot="0 0 0"; hinge.dataset.openRot="0 95 0";
+ addPart(hinge,"a-box",{position:"0.06 0 0",width:"0.12",height:"0.2",depth:"0.01",color:"#D7DBDB"});
+ addPart(hinge,"a-cylinder",{position:"0.06 0.05 -0.012",radius:"0.011",height:"0.09",rotation:"90 0 0",color:"#2A2A28"});
+ addPart(hinge,"a-cylinder",{position:"0.06 -0.05 -0.012",radius:"0.011",height:"0.09",rotation:"90 0 0",color:"#2A2A28"});
+
+ // brazalete (agarrable, se puede separar): "respira" — se infla y desinfla en bucle
+ const cuff = addPart(root,"a-entity",{position:"-0.28 0 0",rotation:"0 90 0"},true);
+ cuff.classList.add("grabbable");
+ addPart(cuff,"a-torus",{radius:"0.2","radius-tubular":"0.072",color:"#3B6EA8",roughness:0.85});
+ addPart(cuff,"a-torus",{position:"0 0 0.02",radius:"0.2","radius-tubular":"0.02",color:"#2C5680",roughness:0.9});
+ addPart(cuff,"a-torus",{rotation:"0 90 0",radius:"0.16","radius-tubular":"0.008",color:"#B7C4C4",metalness:0.7,roughness:0.3});
+ cuff.setAttribute("animation__breathe","property:scale;dir:alternate;dur:1600;loop:true;to:1.07 1.07 1.07;easing:easeInOutSine");
+ addPart(root,"a-cylinder",{position:"0.02 0 0",rotation:"0 0 90",radius:"0.011",height:"0.24",color:"#7A7A7A"});
+ openHooks.tens = ()=>{};
+}
+
+function buildGlu(root){
+ const body = addPart(root,"a-entity",{position:"0 0 0"},true);
+ const cb = caseBox(body,{w:0.15,h:0.3,d:0.04,color:"#2C6E8A",trim:"#1D4E64",rough:0.4});
+ screenPanel(body,{y:0.08,frontZ:cb.frontZ,w:0.1,h:0.12,caseColor:"#1D4E64"});
+ addPart(body,"a-text",{position:"0 0.11 "+(cb.frontZ-0.007),value:"98",align:"center",color:"#3FD8C4",width:"1.3"});
+ addPart(body,"a-text",{position:"0 0.045 "+(cb.frontZ-0.007),value:"mg/dL",align:"center",color:"#8FADB2",width:"0.7"});
+ const led = addPart(body,"a-sphere",{position:"0.05 0.16 "+(cb.frontZ-0.004),radius:"0.008",color:"#37E27A",emissive:"#37E27A","emissive-intensity":"0.8"});
+ led.setAttribute("animation__pulse","property:material.emissiveIntensity;dir:alternate;dur:1100;loop:true;to:0.15");
+ addPart(body,"a-cylinder",{position:"0 -0.11 "+cb.frontZ,radius:"0.018",height:"0.01",color:"#3FD8C4"});
+ screwRow(body,-0.14,cb.frontZ-0.005,0.1);
+
+ // tira reactiva: se "expulsa" del puerto al abrir, y es agarrable
+ addPart(body,"a-box",{position:"0 -0.155 0.015",width:"0.045",height:"0.018",depth:"0.02",color:"#0D1F27"});
+ const strip = addPart(root,"a-entity",{position:"0 -0.16 0.02"},true);
+ strip.classList.add("hinge","grabbable");
+ strip.dataset.closedPos="0 -0.16 0.02"; strip.dataset.openPos="0 -0.33 0.02";
+ addPart(strip,"a-box",{width:"0.02",height:"0.16",depth:"0.008",color:"#EDEFEF",roughness:0.35});
+ addPart(strip,"a-box",{position:"0 0.055 0.001",width:"0.014",height:"0.03",depth:"0.006",color:"#C7A93F"});
+
+ // lanceta al lado (agarrable)
+ const lancet = addPart(root,"a-entity",{position:"-0.22 -0.05 0",rotation:"0 0 90"},true);
+ addPart(lancet,"a-cylinder",{radius:"0.02",height:"0.14",color:"#EDEFEF",roughness:0.35});
+ addPart(lancet,"a-cylinder",{position:"0 0.08 0",radius:"0.014",height:"0.02",color:"#E1584B"});
+ openHooks.glu = (isOpen)=>{
+  strip.setAttribute("animation__eject",{property:"position",to:isOpen?strip.dataset.openPos:strip.dataset.closedPos,dur:450,easing:"easeOutQuad"});
+ };
+}
+
+function buildBomba(root){
+ const body = addPart(root,"a-entity",{position:"0 0 0"},true);
+ const cb = caseBox(body,{w:0.48,h:0.55,d:0.16,color:"#EFF2F2",trim:"#C7CFCF",rough:0.45});
+ screenPanel(body,{y:0.17,frontZ:cb.frontZ,w:0.34,h:0.15,caseColor:"#C7CFCF"});
+ addPart(body,"a-text",{position:"0 0.2 "+(cb.frontZ-0.007),value:"25.0 mL/h",align:"center",color:"#3FD8C4",width:"0.9"});
+ addPart(body,"a-text",{position:"0 0.14 "+(cb.frontZ-0.007),value:"VOL 120 mL",align:"center",color:"#8FADB2",width:"0.6"});
+ const runLed = addPart(body,"a-sphere",{position:"0.15 0.24 "+(cb.frontZ-0.003),radius:"0.009",color:"#37E27A",emissive:"#37E27A","emissive-intensity":"0.8"});
+ runLed.setAttribute("animation__pulse","property:material.emissiveIntensity;dir:alternate;dur:800;loop:true;to:0.15");
+ [-0.1,0,0.1].forEach((sx,i)=>{
+  addPart(body,"a-cylinder",{position:`${sx} -0.16 ${cb.frontZ}`,radius:"0.024",height:"0.012",color:i===1?"#3FD8C4":"#B9C3C3"});
+ });
+ screwRow(body,-0.26,cb.frontZ-0.005,0.42);
+
+ // puerta frontal con bisagra vertical -> revela el mecanismo de rodillos
+ const hinge = addPart(root,"a-entity",{position:"-0.17 0 0.086"});
+ hinge.classList.add("hinge"); hinge.dataset.closedRot="0 0 0"; hinge.dataset.openRot="0 -110 0";
+ const door = addPart(hinge,"a-box",{position:"0.17 -0.02 0",width:"0.34",height:"0.34",depth:"0.02",color:"#DDE3E3",roughness:0.5},true);
+ addPart(door,"a-cylinder",{position:"0.15 0 0.011",radius:"0.012",height:"0.03",rotation:"90 0 0",color:"#8FADB2"});
+ // rodillos del mecanismo: giran de verdad (marca visible para que se note el giro)
+ for(let i=0;i<3;i++){
+  const roller = addPart(root,"a-entity",{position:`${-0.17+0.02+i*0.06} -0.02 0.02`});
+  addPart(roller,"a-cylinder",{radius:"0.02",height:"0.3",color:"#9AA7A7",metalness:0.6,roughness:0.3});
+  addPart(roller,"a-box",{position:"0 0 0.019",width:"0.006",height:"0.28",depth:"0.004",color:"#5B6666"});
+  roller.setAttribute("animation__spin",`property:rotation;from:0 0 0;to:0 ${360} 0;dur:${1400+i*150};loop:true;easing:linear`);
+ }
+
+ // cámara de goteo + tubo IV (la cámara es agarrable) con gota que cae en bucle
+ addPart(root,"a-cylinder",{position:"0 0.55 0.05",rotation:"0 0 0",radius:"0.013",height:"0.22",color:"#CFE0E4"});
+ const chamber = addPart(root,"a-entity",{position:"0 0.42 0.05"},true);
+ addPart(chamber,"a-cylinder",{radius:"0.042",height:"0.13",color:"#EAF3F2",opacity:"0.55",transparent:"true",roughness:0.15});
+ addPart(chamber,"a-cylinder",{position:"0 -0.03 0",radius:"0.02",height:"0.05",color:"#3B6EA8",opacity:"0.6",transparent:"true"});
+ const drop = addPart(root,"a-sphere",{position:"0 0.47 0.05",radius:"0.009",color:"#8FD4E8",opacity:"0.8",transparent:"true",material:"shader:flat"});
+ drop.setAttribute("animation__drip","property:position;from:0 0.47 0.05;to:0 0.37 0.05;dur:900;loop:true;easing:easeInQuad");
+ addPart(root,"a-cylinder",{position:"0 -0.42 0.16",rotation:"0 0 20",radius:"0.011",height:"0.4",color:"#CFE0E4"});
+ // base con soporte de poste
+ addPart(root,"a-box",{position:"0 -0.32 -0.16",width:"0.09",height:"0.35",depth:"0.09",color:"#2A2A28",roughness:0.6});
+
+ openHooks.bomba = ()=>{};
+}
+
+const builders = {dea:buildDEA, tens:buildTens, glu:buildGlu, bomba:buildBomba};
+let isOpen=false;
+
+function toggleOpen(){
+ isOpen=!isOpen;
+ const hinges = document.querySelectorAll("#model .hinge");
+ if(hinges.length===0){ document.querySelector("#status").textContent="Este equipo no tiene una parte para abrir aquí."; return; }
+ hinges.forEach(h=>{
+  if(h.dataset.openRot){
+   h.setAttribute("animation__hinge",{property:"rotation",to:isOpen?h.dataset.openRot:h.dataset.closedRot,dur:600,easing:"easeInOutQuad"});
+  }
+ });
+ if(openHooks[currentKey]) openHooks[currentKey](isOpen);
+ document.querySelector("#openbtn").textContent = isOpen ? "Cerrar" : "Abrir";
+ document.querySelector("#status").textContent = isOpen ? "✓ Compartimento abierto — puedes tomar las piezas." : "✓ Compartimento cerrado.";
+}
+
+// Captura profunda de posición/rotación base de TODO lo que hay dentro
+// del modelo (no solo los hijos directos), para poder restablecer.
+function captureBase(model){
+ model.querySelectorAll("*").forEach(el=>{
+  if(el.hasAttribute("position")) el.dataset.baseAttr = JSON.stringify(el.getAttribute("position"));
+  if(el.classList.contains("hinge") && el.dataset.closedRot) el.dataset.baseRot = el.dataset.closedRot;
+ });
+}
+
+function renderInfo(){
+ const d=data[currentKey];
+ let title="",body="";
+ if(currentTab==="func"){title="Cómo funciona";body="<p>"+d.func+"</p>";}
+ if(currentTab==="mant"){title="Mantenimiento básico";body="<ul>"+d.mant.map(x=>"<li>"+x+"</li>").join("")+"</ul>";}
+ if(currentTab==="fallas"){title="Principales fallas y diagnóstico inicial";body="<ul>"+d.fallas.map(x=>"<li>"+x+"</li>").join("")+"</ul>";}
+ if(currentTab==="seg"){title="Seguridad";body="<ul>"+d.seg.map(x=>"<li>"+x+"</li>").join("")+"</ul>";}
+ document.querySelector("#content").innerHTML="<h3>"+title+"</h3>"+body;
+}
+
+function speakText(text, onEnd){
+ if(!voiceOn || !("speechSynthesis" in window)){ if(onEnd) onEnd(); return; }
+ speechSynthesis.cancel();
+ const u=new SpeechSynthesisUtterance(text);u.lang="es-CO";u.rate=.97;u.pitch=1.03;
+ if(onEnd) u.onend=onEnd;
+ speechSynthesis.speak(u);
+}
+
+// Habla la narración de la pestaña actual y, al terminar, hace una
+// pregunta corta que invita a seguir la conversación (por botón o voz).
+function speakTab(greetFirst){
+ if(!voiceOn) return;
+ const n=narration[currentKey];
+ const line = (greetFirst ? n.greet+" " : "") + n[currentTab];
+ const nextTab = n.next[currentTab];
+ const question = nextTab ? " "+tabQuestion[currentTab] : " ¿pasamos a otro equipo?";
+ speakText(line+question);
+}
+
+function loadDevice(k){
+ currentKey=k; currentTab="func"; exploded=false; isOpen=false;
+ const model=document.querySelector("#model");
+ while(model.firstChild) model.removeChild(model.firstChild);
+ model.setAttribute("position","0 1.3 -0.95");
+ model.setAttribute("rotation","0 15 0");
+ model.setAttribute("scale","1.15 1.15 1.15");
+ builders[k](model);
+ setTimeout(()=>captureBase(model),0);
+ document.querySelector("#openbtn").textContent="Abrir";
+ document.querySelectorAll(".device").forEach(b=>b.classList.toggle("active",b.dataset.k===k));
+ document.querySelectorAll(".tab").forEach(b=>b.classList.toggle("active",b.dataset.tab==="func"));
+ document.querySelector("#status").textContent="✓ "+data[k].name+" seleccionado.";
+ renderInfo(); if(voiceOn) setTimeout(()=>speakTab(true),350);
+}
+
+function goToTab(tab){
+ currentTab=tab;
+ document.querySelectorAll(".tab").forEach(x=>x.classList.toggle("active",x.dataset.tab===tab));
+ renderInfo();
+ speakTab(false);
+}
+
+function toggleVoice(){
+ voiceOn=!voiceOn;
+ const b=document.querySelector("#voice");b.textContent=voiceOn?"Voz: ON":"Voz: OFF";b.classList.toggle("on",voiceOn);
+ if(!voiceOn && "speechSynthesis" in window) speechSynthesis.cancel();
+ else speakTab(false);
+}
+function togglePanel(){document.querySelector("#panel").classList.toggle("hidden")}
+function rotateModel(){const m=document.querySelector("#model"),r=m.getAttribute("rotation")||{x:0,y:20,z:0};m.setAttribute("rotation",{x:r.x,y:r.y+45,z:r.z})}
+
+function resetModel(){
+ const m=document.querySelector("#model");exploded=false;isOpen=false;
+ m.setAttribute("position","0 1.3 -0.95");m.setAttribute("rotation","0 15 0");m.setAttribute("scale","1.15 1.15 1.15");
+ m.querySelectorAll("*").forEach(child=>{
+  if(child.dataset.baseAttr) child.setAttribute("position", JSON.parse(child.dataset.baseAttr));
+  if(child.classList.contains("hinge") && child.dataset.closedRot) child.setAttribute("rotation", child.dataset.closedRot);
+ });
+ if(openHooks[currentKey]) openHooks[currentKey](false);
+ document.querySelector("#openbtn").textContent="Abrir";
+ document.querySelector("#status").textContent="✓ Vista restablecida.";
+}
+
+function explodeModel(){
+ const m=document.querySelector("#model");
+ exploded=!exploded;
+ m.querySelectorAll("*").forEach(child=>{
+  if(!child.dataset.baseAttr) return;
+  const base = JSON.parse(child.dataset.baseAttr);
+  if(!exploded){ child.setAttribute("position", base); return; }
+  let dir = {x:base.x||0,y:base.y||0,z:base.z||0};
+  const len = Math.sqrt(dir.x*dir.x+dir.y*dir.y+dir.z*dir.z) || 1;
+  dir = {x:dir.x/len, y:dir.y/len, z:dir.z/len};
+  if(len < 0.05){ dir = {x:(Math.random()-0.5), y:(Math.random()-0.5), z:(Math.random()-0.5)}; }
+  child.setAttribute("position", {
+   x:(base.x||0)+dir.x*0.22,
+   y:(base.y||0)+dir.y*0.22,
+   z:(base.z||0)+dir.z*0.22
+  });
+ });
+ document.querySelector("#status").textContent = exploded ? "Piezas separadas para observarlas." : "✓ Piezas reunidas.";
+}
+
+/* ============================================================
+   PERMISO DE GIROSCOPIO (iOS 13+)
+   Safari en iPhone exige pedir permiso explícito para leer el
+   giroscopio/acelerómetro, y solo lo concede si se pide dentro
+   de un toque directo del usuario (por eso se llama aquí mismo,
+   dentro de los botones, y no automáticamente al cargar la página).
+   IMPORTANTE: esto solo funciona si la página se abre por https://
+   El giroscopio NO funciona si el archivo se abre directo desde
+   el celular (file://) — hay que subirlo a un hosting con https.
+   ============================================================ */
+function requestMotionPermission(){
+ const DOE = window.DeviceOrientationEvent, DME = window.DeviceMotionEvent;
+ const needsPermission = DOE && typeof DOE.requestPermission === "function";
+ if(!needsPermission) return Promise.resolve(true);
+ return DOE.requestPermission().then(state=>{
+  if(DME && typeof DME.requestPermission === "function") DME.requestPermission().catch(()=>{});
+  return state === "granted";
+ }).catch(()=>false);
+}
+
+function enterVR(){
+ requestMotionPermission().then(ok=>{
+  const s=document.querySelector("a-scene");
+  if(!ok) document.querySelector("#status").textContent="⚠ Sin permiso de giroscopio, el movimiento del celular no va a orientar la vista.";
+  if(s&&s.enterVR)s.enterVR();else document.querySelector("#status").textContent="Este navegador no ofrece VR inmersiva.";
+ });
+}
+
+function enterAR(){
+ const s=document.querySelector("a-scene");
+ if(s && s.enterAR){
+  s.enterAR().catch(()=>{document.querySelector("#status").textContent="Este dispositivo no ofrece realidad mixta (RA). Prueba con unas Quest 3 o similares.";});
+ } else {
+  document.querySelector("#status").textContent="Este navegador no ofrece RA con passthrough.";
+ }
+}
+
+/* ============================================================
+   MODO CARTÓN (gafas de plástico/cartón + celular)
+   La mayoría de estas gafas NO tienen WebXR nativo, así que
+   "Entrar en VR" no las detecta y no divide la pantalla. Esta
+   función simula el efecto estéreo a mano: intercepta la función
+   de dibujado del renderer y, en vez de dibujar una sola vez,
+   dibuja la escena dos veces (ojo izquierdo y ojo derecho) cada
+   una en su mitad de la pantalla, con un pequeño desplazamiento
+   horizontal entre ellas (igual que hacen los visores reales).
+   El giro de la cabeza lo sigue dando el giroscopio, a través del
+   look-controls normal de A-Frame — aquí solo dividimos la imagen.
+   ============================================================ */
+let cardboardMode = false;
+let stereoInstalled = false;
+
+function installStereoRenderer(){
+ if(stereoInstalled) return;
+ const sceneEl = document.querySelector("a-scene");
+ const renderer = sceneEl.renderer;
+ if(!renderer) return;
+ stereoInstalled = true;
+ const originalRender = renderer.render.bind(renderer);
+ const EYE_SEP = 0.032; // separación por ojo (mitad del promedio interpupilar humano)
+ renderer.render = function(scene, camera){
+  if(!cardboardMode || !camera.isPerspectiveCamera){ originalRender(scene, camera); return; }
+  const w = renderer.domElement.clientWidth, h = renderer.domElement.clientHeight;
+  const halfW = w/2;
+  const prevAspect = camera.aspect;
+  camera.aspect = halfW/h;
+  camera.updateProjectionMatrix();
+  const localX = new AFRAME.THREE.Vector3(1,0,0).applyQuaternion(camera.quaternion);
+  renderer.setScissorTest(true);
+  // ojo izquierdo
+  camera.position.addScaledVector(localX, -EYE_SEP);
+  camera.updateMatrixWorld(true);
+  renderer.setViewport(0,0,halfW,h); renderer.setScissor(0,0,halfW,h);
+  originalRender(scene, camera);
+  // ojo derecho
+  camera.position.addScaledVector(localX, EYE_SEP*2);
+  camera.updateMatrixWorld(true);
+  renderer.setViewport(halfW,0,halfW,h); renderer.setScissor(halfW,0,halfW,h);
+  originalRender(scene, camera);
+  // restablecer cámara y viewport a estado normal
+  camera.position.addScaledVector(localX, -EYE_SEP);
+  camera.updateMatrixWorld(true);
+  renderer.setScissorTest(false);
+  renderer.setViewport(0,0,w,h);
+  camera.aspect = prevAspect;
+  camera.updateProjectionMatrix();
+ };
+}
+
+function enterCardboard(){
+ requestMotionPermission().then(ok=>{
+  installStereoRenderer();
+  cardboardMode = true;
+  document.body.classList.add("cardboard-on");
+  const el = document.documentElement;
+  if(el.requestFullscreen) el.requestFullscreen().catch(()=>{});
+  if(screen.orientation && screen.orientation.lock) screen.orientation.lock("landscape").catch(()=>{});
+  document.querySelector("#status").textContent = ok
+   ? "✓ Modo Cartón activo — coloca el celular en las gafas."
+   : "Modo Cartón activo, pero sin permiso de giroscopio no vas a poder mirar alrededor moviendo la cabeza.";
+ });
+}
+
+function exitCardboard(){
+ cardboardMode = false;
+ document.body.classList.remove("cardboard-on");
+ if(document.exitFullscreen) document.exitFullscreen().catch(()=>{});
+ if(screen.orientation && screen.orientation.unlock) screen.orientation.unlock();
+ document.querySelector("#status").textContent = "✓ Modo Cartón desactivado.";
+}
+
+// Oculta el piso y el cielo mientras estamos en RA para no tapar la cámara real.
+const scene = document.querySelector("a-scene");
+scene.addEventListener("enter-vr", ()=>{
+ const isAR = scene.is("ar-mode");
+ document.querySelectorAll(".ar-hide").forEach(el=>el.setAttribute("visible", !isAR));
+});
+scene.addEventListener("exit-vr", ()=>{
+ document.querySelectorAll(".ar-hide").forEach(el=>el.setAttribute("visible", true));
+});
+
+document.querySelectorAll(".device").forEach(b=>b.onclick=()=>loadDevice(b.dataset.k));
+document.querySelectorAll(".tab").forEach(b=>b.onclick=()=>goToTab(b.dataset.tab));
+
+/* ============================================================
+   AGARRAR CON LAS MANOS (pellizco pulgar + índice)
+   No se dibuja ninguna mano virtual: en RA el usuario ve su propia
+   mano por la cámara. Solo usamos hand-tracking-controls para saber
+   dónde está el pellizco y mover el equipo con él.
+   ============================================================ */
+function setupHand(handEl){
+ handEl.addEventListener("pinchstarted", (evt)=>{
+  if(grabbedBy) return;
+  const pinchPos = evt.detail.position;
+  const model = document.querySelector("#model");
+  let best=null, bestDist=0.22;
+  document.querySelectorAll("#model .grabbable").forEach(el=>{
+   const wp = el.object3D.getWorldPosition(new AFRAME.THREE.Vector3());
+   const d = wp.distanceTo(pinchPos);
+   if(d < bestDist){ best = el; bestDist = d; }
+  });
+  if(!best){
+   const wp = model.object3D.getWorldPosition(new AFRAME.THREE.Vector3());
+   const d = wp.distanceTo(pinchPos);
+   if(d < 0.5) best = model;
+  }
+  if(!best) return;
+  grabbedBy = handEl;
+  grabbedEl = best;
+  const wp = best.object3D.getWorldPosition(new AFRAME.THREE.Vector3());
+  grabOffset = {x:wp.x-pinchPos.x, y:wp.y-pinchPos.y, z:wp.z-pinchPos.z};
+  document.querySelector("#status").textContent = best===model ? "✋ Sujetando el equipo completo — muévelo con la mano." : "✋ Sujetando una pieza — muévela con la mano.";
+ });
+ handEl.addEventListener("pinchmoved", (evt)=>{
+  if(grabbedBy !== handEl || !grabbedEl) return;
+  const p = evt.detail.position;
+  const desiredWorld = new AFRAME.THREE.Vector3(p.x+grabOffset.x, p.y+grabOffset.y, p.z+grabOffset.z);
+  const parent = grabbedEl.object3D.parent;
+  const local = parent ? parent.worldToLocal(desiredWorld.clone()) : desiredWorld;
+  grabbedEl.object3D.position.copy(local);
+ });
+ handEl.addEventListener("pinchended", ()=>{
+  if(grabbedBy === handEl){
+   grabbedBy = null; grabbedEl = null;
+   document.querySelector("#status").textContent = "✓ Pieza soltada.";
+  }
+ });
+}
+setupHand(document.querySelector("#handLeft"));
+setupHand(document.querySelector("#handRight"));
+
+/* ============================================================
+   ASISTENTE POR VOZ (reconocimiento de habla)
+   Botón "🎤 Preguntar": escucha una frase corta y decide qué hacer
+   según palabras clave (equipo o pestaña que el usuario nombró).
+   ============================================================ */
+const SpeechRec = window.SpeechRecognition || window.webkitSpeechRecognition;
+const micBtn = document.querySelector("#mic");
+const transcriptEl = document.querySelector("#transcript");
+if(!SpeechRec){ micBtn.disabled = true; micBtn.title = "Este navegador no permite reconocimiento de voz."; }
+
+const deviceWords = {dea:["dea","desfibrilador"],tens:["tensiómetro","tension","presión"],glu:["glucómetro","glucosa"],bomba:["bomba","infusión"]};
+const tabWords = {func:["funciona","funcionamiento"],mant:["mantenimiento","mantener","cuidado"],fallas:["falla","fallas","problema"],seg:["seguridad","seguro"]};
+
+function listenOnce(){
+ if(!SpeechRec) return;
+ const rec = new SpeechRec();
+ rec.lang = "es-CO"; rec.continuous = false; rec.interimResults = false;
+ micBtn.classList.add("listening");
+ transcriptEl.classList.remove("hidden");
+ transcriptEl.textContent = "Escuchando...";
+ rec.onresult = (e)=>{
+  const said = e.results[0][0].transcript.toLowerCase();
+  transcriptEl.textContent = "\""+said+"\"";
+  handleVoiceCommand(said);
+ };
+ rec.onerror = ()=>{ transcriptEl.textContent = "No te escuché bien, intenta de nuevo."; };
+ rec.onend = ()=>{ micBtn.classList.remove("listening"); setTimeout(()=>transcriptEl.classList.add("hidden"),2500); };
+ rec.start();
+}
+
+function handleVoiceCommand(said){
+ for(const k in deviceWords){ if(deviceWords[k].some(w=>said.includes(w))){ loadDevice(k); return; } }
+ for(const t in tabWords){ if(tabWords[t].some(w=>said.includes(w))){ goToTab(t); return; } }
+ if(said.includes("sí") || said.includes("si")){
+  const nextTab = narration[currentKey].next[currentTab];
+  if(nextTab) goToTab(nextTab); else speakText("Dime qué equipo quieres ver: DEA, tensiómetro, glucómetro o bomba de infusión.");
+  return;
+ }
+ speakText("No te entendí bien. Puedes decir el nombre de un equipo, o funcionamiento, mantenimiento, fallas o seguridad.");
+}
+
+loadDevice("dea");
+</script>
+</body>
+</html>

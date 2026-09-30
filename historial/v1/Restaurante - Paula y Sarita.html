@@ -1,0 +1,115 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no"/>
+<title>Restaurante VR — Cocina de Restaurante con Control por Manos</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="styles.css"/>
+
+<!-- ============================================================
+     LIBRERÍAS EXTERNAS (CDN) — no requieren instalación local
+     - MediaPipe Hands: detección de manos y dedos en tiempo real
+     - MediaPipe Camera Utils: helper para alimentar frames de la webcam
+     - Three.js (build clásico UMD): motor 3D, expone el global THREE
+     ============================================================ -->
+<script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands@0.4/hands.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils@0.3/camera_utils.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.min.js"></script>
+</head>
+<body>
+
+<!-- Fondo: transmisión en vivo de la webcam (capa AR) -->
+<video id="video" autoplay muted playsinline></video>
+
+<!-- Canvas 3D del restaurante, dibujado con fondo transparente sobre el video -->
+<canvas id="scene"></canvas>
+
+<!-- ============================================================
+     PANTALLA DE INICIO
+     ============================================================ -->
+<div id="start-screen">
+  <div class="panel">
+    <h1><span class="dot"></span>🍳 Restaurante VR</h1>
+    <p class="subtitle">Cocina de restaurante moderna, en primera persona, controlando todo con tus manos frente a la cámara</p>
+
+    <ul class="instructions">
+      <li><b>🤏 Junta pulgar e índice (pinza)</b> — Agarrar sartenes, ingredientes, utensilios y platos</li>
+      <li><b>✋ Mueve la mano</b> — Desplazar lo que llevas agarrado en el espacio 3D</li>
+      <li><b>🥬 Despensa (izquierda)</b> — Los ingredientes están siempre a la vista, sin puertas</li>
+      <li><b>🔪 Toma el cuchillo</b> del estante y agita la mano sobre la tabla para picar</li>
+      <li><b>🥄 Toma la espátula o el cucharón</b> y agita la mano sobre el sartén para remover y acelerar la cocción</li>
+      <li><b>🔁 Mantén la mano sobre la perilla</b> de la estufa y gírala con firmeza — a la derecha enciende, a la izquierda apaga (un roce accidental no la activa)</li>
+      <li><b>🚪 Pinza sobre el mango de la nevera</b> — Abrir / cerrar la puerta</li>
+      <li><b>🥤 Pinza sobre la licuadora</b> — Encender / apagar</li>
+      <li><b>🗑 Suelta algo en la caneca</b> — Descartar ingredientes o platos</li>
+      <li><b>🍽 Suelta el plato en la ventanilla de pase</b> — Servir el pedido</li>
+      <li><b>💡 Sigue el brillo y el marcador en el mesón</b> — señalan el siguiente ingrediente y dónde colocarlo; el panel superior te indica el paso exacto</li>
+      <li><b>W A S D</b> — Caminar &nbsp; <b>← →</b> Girar &nbsp; <b>↑ ↓</b> Mirar arriba/abajo</li>
+    </ul>
+
+    <button id="start-btn">▶ Entrar a la cocina</button>
+    <div id="start-status"></div>
+    <p class="hint">Se solicitará permiso de cámara. Ubícate en un lugar con buena luz y muestra ambas manos frente a la webcam para mejores resultados.</p>
+  </div>
+</div>
+
+<!-- ============================================================
+     HUD DE JUEGO (oculto hasta iniciar)
+     ============================================================ -->
+<div id="hud" class="hidden">
+  <button id="restart-btn">⟲ Reiniciar</button>
+
+  <div id="top-left">
+    <div id="score-box">🪙 <span id="score">0</span></div>
+    <div id="hand-status">
+      <span id="status-text">Iniciando cámara…</span>
+      <div class="hand-row">
+        <span class="hand-label">Izq</span>
+        <div class="pinch-bar"><div id="pinch-l" class="pinch-fill"></div></div>
+      </div>
+      <div class="hand-row">
+        <span class="hand-label">Der</span>
+        <div class="pinch-bar"><div id="pinch-r" class="pinch-fill"></div></div>
+      </div>
+    </div>
+  </div>
+
+  <div id="order-ticket">
+    <h3>📋 PEDIDO</h3>
+    <div id="order-name">—</div>
+    <ul id="order-items"></ul>
+    <div class="timer-bar"><div id="order-timer" class="timer-fill"></div></div>
+  </div>
+
+  <div id="tutorial-panel">
+    <span id="tutorial-icon">👉</span>
+    <span id="tutorial-text">Cargando pedido…</span>
+  </div>
+
+  <div id="stove-indicator">🔥 Estufa: <b id="stove-state">Apagada</b></div>
+  <div id="held-info">Manos vacías</div>
+
+  <div id="toast-wrap"></div>
+
+  <div id="controls-hint">WASD mover · ←→ girar · ↑↓ mirar · pinza = agarrar</div>
+</div>
+
+<!-- ============================================================
+     LÓGICA DEL PROYECTO — se cargan en este orden porque cada
+     módulo consume el `window.X` que publica el anterior:
+     tracking.js → cámara + MediaPipe Hands + gestos (HandTracking)
+     world.js    → escena 3D, cocina, zonas de interacción (World)
+     items.js    → ingredientes/utensilios/platos/sartenes (Items)
+     game.js     → manos, interacción y bucle principal (Game)
+     guide.js    → pedidos, resaltado y tutorial paso a paso (Guide)
+     ============================================================ -->
+<script src="tracking.js"></script>
+<script src="world.js"></script>
+<script src="items.js"></script>
+<script src="game.js"></script>
+<script src="guide.js"></script>
+</body>
+</html>

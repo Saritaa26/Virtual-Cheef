@@ -1,0 +1,2966 @@
+<!doctype html>
+<!-- ================================================================
+     RESTAURANTE VR — build UNIFICADO en un solo archivo
+     ================================================================
+     Este archivo NO es una versión nueva del juego: es el MISMO
+     proyecto que ya vive repartido en varios archivos (tracking.js,
+     world.js, items.js, game.js, guide.js, cardboard.js + styles.css),
+     empaquetado aquí dentro de un único .html para poder distribuirlo,
+     abrirlo o subirlo como un solo archivo.
+
+     Lo que YA incluye (y por qué el requerimiento de "cabeza + manos
+     por cámara" ya estaba resuelto antes de este empaquetado):
+       • Detección de manos por cámara (MediaPipe Hands) — ver el
+         bloque <script> de tracking.js más abajo.
+       • Cabeza/mirada por el giroscopio del celular (DeviceOrientation)
+         para el "Modo Cartón" — ver el bloque <script> de cardboard.js.
+       • Paridad visual móvil/PC: se añadió al final del <style> un
+         bloque nuevo de ajustes responsivos (paneles más compactos en
+         pantallas angostas, y relleno para el notch/barra de iOS con
+         env(safe-area-inset-*)) para que nada quede cortado ni fuera
+         de vista en un celular.
+
+     Aclaración honesta sobre "WebXR": esto NO usa la API real de
+     WebXR (navigator.xr / sesiones "immersive-vr"). Usa el mismo
+     truco que emplean casi todas las apps de "cartón" (incluida
+     MedVR, la referencia visual de este proyecto): DeviceOrientation
+     para la mirada + un render estéreo hecho a mano (dos mitades de
+     pantalla). Se eligió así a propósito en una conversación anterior,
+     porque la API de manos de WebXR (hand-tracking-controls) SOLO
+     funciona dentro de una sesión inmersiva en un visor con esa
+     capacidad (p. ej. Meta Quest) y NO con la cámara trasera de un
+     celular común en una pestaña de navegador normal — que es
+     justamente lo que se necesita aquí.
+     ================================================================ -->
+<html lang="es">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover"/>
+<title>Restaurante VR — Build Unificado</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@500&display=swap" rel="stylesheet">
+
+<!-- ============================================================
+     LIBRERÍAS EXTERNAS (CDN) — no requieren instalación local
+     - MediaPipe Hands: detección de manos y dedos en tiempo real
+       (ESTO responde al requisito de "detección de manos con la
+       cámara del celular"; se usa MediaPipe en vez de TensorFlow.js
+       porque ya viene entrenado para manos y corre más liviano).
+     - MediaPipe Camera Utils: helper para alimentar frames de la
+       cámara TRASERA del celular al modelo anterior.
+     - Three.js (build clásico UMD): motor 3D, expone el global THREE
+     ============================================================ -->
+<script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands@0.4/hands.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils@0.3/camera_utils.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.min.js"></script>
+
+<style>
+/* ============================================================
+   RESTAURANTE VR — Hoja de estilos
+   Cubre: video de cámara de fondo, canvas 3D superpuesto,
+   pantalla de inicio, HUD de juego (ticket de pedido, puntaje,
+   estado de manos), y mensajes emergentes (toasts).
+
+   Paleta y tipografía adoptadas de MedVR Biomédico (panel oscuro
+   azul-tinta, acento teal quirúrgico, Space Grotesk + IBM Plex)
+   para que el restaurante se vea como si viviera dentro del mismo
+   sistema visual. Esto es SOLO piel: ningún id/clase que game.js,
+   world.js, items.js o guide.js consulten fue tocado ni renombrado.
+   ============================================================ */
+
+:root{
+  --bg:#0A1A22;
+  --ink:#EAF3F2;
+  --muted:#8FADB2;
+  --accent:#3FD8C4;
+  --accent2:#6EE7D8;
+  --accent-dim:#1F6E63;
+  --danger:#E1584B;
+  --panel-bg:linear-gradient(180deg,rgba(15,37,48,.94),rgba(10,26,34,.94));
+  --panel-border:#2A4B57;
+  --shadow:0 20px 50px rgba(0,0,0,.5);
+  --radius:14px;
+  --font-head:'Space Grotesk',sans-serif;
+  --font-body:'IBM Plex Sans',sans-serif;
+  --font-mono:'IBM Plex Mono',monospace;
+}
+
+*{box-sizing:border-box;margin:0;padding:0;}
+html,body{
+  width:100%;height:100%;
+  overflow:hidden;
+  background:var(--bg);
+  font-family:var(--font-body);
+  color:var(--ink);
+  -webkit-user-select:none;user-select:none;
+}
+
+/* ---------- Capa 0: video de la cámara (fondo AR) ---------- */
+#video{
+  position:fixed;
+  inset:0;
+  width:100%;height:100%;
+  object-fit:cover;
+  background:#000;
+  z-index:0;
+}
+
+/* ---------- Capa 1: canvas 3D (Three.js, fondo transparente) ---------- */
+#scene{
+  position:fixed;
+  inset:0;
+  width:100%;height:100%;
+  z-index:1;
+  pointer-events:none; /* el control es por gestos y teclado, no por mouse */
+  display:block;
+}
+
+.hidden{display:none !important;}
+
+/* ============================================================
+   PANTALLA DE INICIO
+   ============================================================ */
+#start-screen{
+  position:fixed;inset:0;z-index:100;
+  display:flex;align-items:center;justify-content:center;
+  background:radial-gradient(ellipse at center, #0F2530 0%, #071118 100%);
+  padding:20px;
+}
+#start-screen .panel{
+  max-width:480px;width:100%;
+  background:var(--panel-bg);
+  border:1px solid var(--panel-border);
+  border-radius:20px;
+  padding:28px 30px;
+  box-shadow:var(--shadow);
+  backdrop-filter:blur(14px);
+  text-align:center;
+}
+#start-screen h1{
+  font-family:var(--font-head);
+  font-size:28px;
+  font-weight:600;
+  letter-spacing:.2px;
+  color:var(--ink);
+  margin-bottom:6px;
+}
+#start-screen h1 .dot{
+  display:inline-block;width:10px;height:10px;border-radius:50%;
+  background:var(--accent);margin-right:10px;
+  box-shadow:0 0 12px var(--accent);
+}
+#start-screen .subtitle{
+  color:var(--muted);
+  font-size:14px;
+  margin-bottom:18px;
+}
+.instructions{
+  list-style:none;
+  text-align:left;
+  background:rgba(255,255,255,.04);
+  border:1px solid rgba(255,255,255,.08);
+  border-radius:12px;
+  padding:14px 16px;
+  margin-bottom:20px;
+  font-size:13px;
+  line-height:1.85;
+  color:var(--ink);
+  max-height:42vh;
+  overflow-y:auto;
+}
+.instructions li b{color:var(--accent2);}
+.instructions li{border-bottom:1px dashed rgba(255,255,255,.08);padding:3px 0;}
+.instructions li:last-child{border-bottom:none;}
+
+#start-btn{
+  font-family:var(--font-head);
+  font-size:18px;
+  letter-spacing:2px;
+  font-weight:700;
+  background:linear-gradient(180deg,var(--accent),var(--accent-dim));
+  border:none;
+  color:#04211C;
+  padding:14px 38px;
+  border-radius:30px;
+  cursor:pointer;
+  box-shadow:0 8px 22px rgba(63,216,196,.35);
+  transition:transform .12s, box-shadow .12s;
+}
+#start-btn:hover{transform:translateY(-2px);box-shadow:0 12px 28px rgba(63,216,196,.45);}
+#start-btn:active{transform:translateY(0);}
+#start-btn:disabled{opacity:.55;cursor:wait;}
+
+.hint{margin-top:14px;font-size:11.5px;color:var(--muted);line-height:1.5;}
+#start-status{margin-top:10px;font-size:12.5px;color:var(--danger);min-height:16px;}
+
+/* ============================================================
+   HUD EN JUEGO
+   ============================================================ */
+#hud{position:fixed;inset:0;z-index:10;pointer-events:none;}
+
+#top-left{
+  position:absolute;top:14px;left:14px;
+  display:flex;flex-direction:column;gap:8px;
+  align-items:flex-start;
+}
+#score-box{
+  background:var(--panel-bg);
+  border:1px solid var(--panel-border);
+  border-radius:10px;
+  padding:8px 16px;
+  font-family:var(--font-head);
+  font-size:20px;font-weight:700;
+  color:var(--accent);
+  box-shadow:var(--shadow);
+}
+#hand-status{
+  background:var(--panel-bg);
+  border:1px solid var(--panel-border);
+  border-radius:10px;
+  padding:8px 12px;
+  min-width:190px;
+  font-family:var(--font-mono);
+  font-size:11px;
+  letter-spacing:.2px;
+  color:var(--muted);
+}
+#status-text{display:block;margin-bottom:6px;color:var(--ink);}
+.hand-row{display:flex;align-items:center;gap:6px;margin-top:4px;}
+.hand-label{width:26px;font-weight:600;color:var(--ink);}
+.pinch-bar{flex:1;height:8px;border-radius:5px;background:rgba(255,255,255,.1);overflow:hidden;}
+.pinch-fill{height:100%;width:0%;background:linear-gradient(90deg,var(--accent-dim),var(--accent));transition:width .06s linear;}
+.pinch-fill.grabbing{background:linear-gradient(90deg,var(--accent),#c8fff5);}
+
+/* ---------- Ticket de pedido ---------- */
+#order-ticket{
+  position:absolute;top:14px;right:14px;
+  width:220px;
+  background:#fdf6e3;
+  color:#2a1c0a;
+  border-radius:4px;
+  border-top:3px solid var(--accent);
+  padding:14px 16px 12px;
+  box-shadow:var(--shadow);
+  font-family:'Courier New',monospace;
+  transform:rotate(1.5deg);
+}
+#order-ticket::before{
+  content:'';
+  position:absolute;top:-8px;left:0;right:0;height:8px;
+  background:repeating-linear-gradient(90deg,#fdf6e3 0 8px,transparent 8px 14px);
+}
+#order-ticket h3{font-family:var(--font-head);font-size:13px;letter-spacing:1px;border-bottom:1px dashed #b8a578;padding-bottom:6px;margin-bottom:8px;}
+#order-name{font-size:15px;font-weight:700;margin-bottom:6px;color:#7a3b12;}
+#order-items{list-style:none;font-size:12px;line-height:1.7;margin-bottom:10px;}
+#order-items li{display:flex;justify-content:space-between;gap:6px;}
+#order-items li.done{color:var(--accent-dim);text-decoration:line-through;}
+
+/* ---------- Panel de tutorial paso a paso ---------- */
+#tutorial-panel{
+  position:absolute;top:58px;left:50%;transform:translateX(-50%);
+  display:flex;align-items:center;gap:10px;
+  max-width:min(640px,86vw);
+  background:linear-gradient(180deg,rgba(63,216,196,.18),rgba(10,26,34,.92));
+  border:1px solid var(--accent);
+  border-radius:14px;
+  padding:10px 20px;
+  box-shadow:var(--shadow);
+  font-size:14px;
+  line-height:1.4;
+  text-align:left;
+}
+#tutorial-icon{font-size:20px;flex:none;}
+#tutorial-text{color:var(--ink);font-weight:600;}
+
+/* ---------- Indicador de estufa ---------- */
+#stove-indicator{
+  position:absolute;bottom:16px;left:14px;
+  background:var(--panel-bg);
+  border:1px solid var(--panel-border);
+  border-radius:10px;
+  padding:8px 14px;
+  font-family:var(--font-mono);
+  font-size:12.5px;
+  box-shadow:var(--shadow);
+}
+#stove-state{color:var(--danger);}
+#stove-state.on{color:var(--accent);}
+
+/* ---------- Objeto en mano ---------- */
+#held-info{
+  position:absolute;bottom:16px;right:14px;
+  background:var(--panel-bg);
+  border:1px solid var(--panel-border);
+  border-radius:10px;
+  padding:8px 14px;
+  font-family:var(--font-mono);
+  font-size:12px;
+  color:var(--muted);
+  min-width:170px;
+  text-align:right;
+  box-shadow:var(--shadow);
+}
+#held-info b{color:var(--ink);}
+
+/* ---------- Toast (mensajes emergentes) ---------- */
+#toast-wrap{
+  position:absolute;bottom:110px;left:50%;transform:translateX(-50%);
+  display:flex;flex-direction:column;gap:6px;align-items:center;
+  pointer-events:none;
+}
+.toast{
+  background:rgba(10,26,34,.94);
+  border:1px solid var(--panel-border);
+  color:var(--ink);
+  padding:8px 18px;
+  border-radius:20px;
+  font-size:13px;
+  box-shadow:var(--shadow);
+  opacity:0;
+  transform:translateY(8px);
+  transition:opacity .25s, transform .25s;
+  white-space:nowrap;
+}
+.toast.show{opacity:1;transform:translateY(0);}
+
+/* ---------- Botón reiniciar + Modo Cartón (par centrado arriba) ---------- */
+#restart-btn,#cardboard-btn{
+  position:absolute;top:14px;
+  pointer-events:auto;
+  background:var(--panel-bg);
+  border:1px solid var(--panel-border);
+  color:var(--muted);
+  font-size:12px;
+  padding:7px 14px;
+  border-radius:20px;
+  cursor:pointer;
+  white-space:nowrap;
+}
+#restart-btn{left:50%;transform:translateX(calc(-100% - 5px));}
+#cardboard-btn{left:50%;transform:translateX(5px);}
+#restart-btn:hover,#cardboard-btn:hover{color:var(--ink);border-color:var(--accent);}
+
+/* ---------- Ayuda de controles (esquina inferior, discreta) ---------- */
+#controls-hint{
+  position:absolute;bottom:16px;left:50%;transform:translateX(-50%);
+  font-size:11px;color:rgba(255,255,255,.55);
+  background:rgba(0,0,0,.4);
+  padding:5px 12px;border-radius:14px;
+  white-space:nowrap;
+}
+
+/* ============================================================
+   MODO CARTÓN (gafas de plástico/cartón + celular)
+   Divisor central para alinear el celular dentro de las gafas, y
+   un botón de salida por cada ojo — en modo estéreo cada mitad de
+   la pantalla se ve por separado, así que hace falta uno a cada
+   lado. Misma idea que en MedVR Biomédico.
+   ============================================================ */
+#cardboard-divider{
+  position:fixed;z-index:35;top:0;left:50%;width:1px;height:100%;
+  background:rgba(255,255,255,.18);pointer-events:none;display:none;
+}
+#cardboard-exit{position:fixed;z-index:40;inset:0;pointer-events:none;display:none;}
+#cardboard-exit button{
+  position:absolute;top:16px;transform:translateX(-50%);pointer-events:auto;
+  background:var(--panel-bg);color:var(--ink);border:1px solid var(--accent);
+  border-radius:9px;padding:8px 12px;font-size:12px;cursor:pointer;
+}
+#cardboard-exit .btn-l{left:25%;}
+#cardboard-exit .btn-r{left:75%;}
+body.cardboard-on #hud,body.cardboard-on #start-screen{display:none!important;}
+body.cardboard-on #cardboard-divider,body.cardboard-on #cardboard-exit{display:block;}
+
+/* ================================================================
+   PARIDAD VISUAL MÓVIL — build unificado
+   El HUD de arriba se pensó primero para pantallas anchas de PC.
+   Este bloque (que se aplica DESPUÉS y por lo tanto gana en la
+   cascada) comprime y reacomoda los paneles en celulares angostos,
+   y respeta el notch/la barra de gestos de iOS, para que en un
+   teléfono no se vea ni un solo elemento cortado o fuera de vista.
+   ================================================================ */
+
+/* Tablet / celular en horizontal.
+   Los botones de arriba (Reiniciar / Modo Cartón) estaban centrados
+   LADO A LADO — con el panel de manos angosto de PC eso nunca chocaba,
+   pero en un celular el panel de manos se vuelve casi tan ancho como
+   la mitad de la pantalla y sí llegaba a pisar el botón. Se apilan uno
+   encima del otro para liberar todo el ancho central. */
+@media (max-width:640px){
+  #order-ticket{width:170px;font-size:11px;}
+  #hand-status{min-width:150px;}
+  #tutorial-panel{top:96px;font-size:12px;padding:8px 14px;}
+  #tutorial-icon{font-size:16px;}
+  #restart-btn,#cardboard-btn{
+    font-size:11px;padding:6px 10px;
+    left:50%;transform:translateX(-50%);
+  }
+  #restart-btn{top:14px;}
+  #cardboard-btn{top:44px;}
+}
+
+/* Celular angosto en vertical: aquí es donde el diseño de PC se
+   recortaba antes — se compactan los 4 paneles de las esquinas y se
+   baja el panel de tutorial para que no quede encima de ellos. */
+@media (max-width:420px){
+  #top-left{gap:6px;}
+  #score-box{font-size:15px;padding:6px 12px;}
+  #hand-status{min-width:118px;font-size:9.5px;padding:6px 9px;}
+  #order-ticket{width:120px;padding:9px 10px 7px;}
+  #order-ticket h3{font-size:10px;}
+  #order-name{font-size:11px;}
+  #order-items{font-size:9.5px;}
+  #tutorial-panel{top:116px;font-size:10.5px;padding:6px 10px;max-width:94vw;}
+  #tutorial-icon{font-size:14px;}
+  #stove-indicator{font-size:10.5px;padding:5px 9px;}
+  #held-info{font-size:9.5px;min-width:104px;padding:5px 9px;}
+  #restart-btn,#cardboard-btn{font-size:9.5px;padding:4px 7px;}
+}
+
+/* Celulares extremos (≤340px, p. ej. un iPhone SE de 1ª gen): incluso
+   apilados, los botones centrales pueden rozar los paneles de las
+   esquinas si estos son muy anchos — se angostan un poco más. */
+@media (max-width:340px){
+  #hand-status{min-width:74px;font-size:9px;padding:5px 6px;}
+  #order-ticket{width:98px;}
+  #order-ticket h3{font-size:9px;}
+  #score-box{font-size:13px;padding:5px 10px;}
+  #restart-btn,#cardboard-btn{font-size:9px;padding:3px 6px;}
+}
+
+/* La ayuda "WASD mover..." asume teclado físico: en un celular
+   táctil no aplica, así que se oculta (no es que "falte", es que no
+   corresponde a ese dispositivo). */
+@media (max-width:900px){
+  #controls-hint{display:none;}
+}
+
+/* Áreas seguras (notch, cámara frontal, barra de inicio de iOS):
+   con viewport-fit=cover el contenido puede dibujarse debajo de esas
+   zonas, así que empujamos el HUD hacia adentro con env(), en vez de
+   dejar que un panel quede tapado o "fuera de vista". */
+#top-left{ top:max(14px, env(safe-area-inset-top)); left:max(14px, env(safe-area-inset-left)); }
+#order-ticket{ top:max(14px, env(safe-area-inset-top)); right:max(14px, env(safe-area-inset-right)); }
+#stove-indicator{ bottom:max(16px, env(safe-area-inset-bottom)); left:max(14px, env(safe-area-inset-left)); }
+#held-info{ bottom:max(16px, env(safe-area-inset-bottom)); right:max(14px, env(safe-area-inset-right)); }
+#toast-wrap{ bottom:max(110px, calc(96px + env(safe-area-inset-bottom))); }
+</style>
+</head>
+<body>
+
+<!-- Fondo: transmisión en vivo de la webcam (capa AR) -->
+<video id="video" autoplay muted playsinline></video>
+
+<!-- Canvas 3D del restaurante, dibujado con fondo transparente sobre el video -->
+<canvas id="scene"></canvas>
+
+<!-- ============================================================
+     PANTALLA DE INICIO
+     ============================================================ -->
+<div id="start-screen">
+  <div class="panel">
+    <h1><span class="dot"></span>🍳 Restaurante VR</h1>
+    <p class="subtitle">Cocina de restaurante moderna, en primera persona, controlando todo con tus manos frente a la cámara</p>
+
+    <ul class="instructions">
+      <li><b>🤏 Junta pulgar e índice (pinza)</b> — Agarrar sartenes, ingredientes, utensilios y platos</li>
+      <li><b>✋ Mueve la mano</b> — Desplazar lo que llevas agarrado en el espacio 3D</li>
+      <li><b>🥬 Despensa (izquierda)</b> — Los ingredientes están siempre a la vista, sin puertas</li>
+      <li><b>🔪 Toma el cuchillo</b> del estante y agita la mano sobre la tabla para picar</li>
+      <li><b>🥄 Toma la espátula o el cucharón</b> y agita la mano sobre el sartén para remover y acelerar la cocción</li>
+      <li><b>🔁 Mantén la mano sobre la perilla</b> de la estufa y gírala con firmeza — a la derecha enciende, a la izquierda apaga (un roce accidental no la activa)</li>
+      <li><b>🚪 Pinza sobre el mango de la nevera</b> — Abrir / cerrar la puerta</li>
+      <li><b>🥤 Pinza sobre la licuadora</b> — Encender / apagar</li>
+      <li><b>🗑 Suelta algo en la caneca</b> — Descartar ingredientes o platos</li>
+      <li><b>🍽 Suelta el plato en la ventanilla de pase</b> — Servir el pedido</li>
+      <li><b>💡 Sigue el brillo y el marcador en el mesón</b> — señalan el siguiente ingrediente y dónde colocarlo; el panel superior te indica el paso exacto</li>
+      <li><b>W A S D</b> — Caminar &nbsp; <b>← →</b> Girar &nbsp; <b>↑ ↓</b> Mirar arriba/abajo &nbsp; <b>C</b> Agacharse</li>
+      <li><b>🙇 Agáchate (mantén C)</b> — Baja la cámara para alcanzar ingredientes o platos que se cayeron al piso</li>
+      <li><b>🥽 Modo Cartón</b> — Divide la pantalla en dos para tus gafas de cartón/plástico; mira alrededor moviendo la cabeza</li>
+    </ul>
+
+    <button id="start-btn">▶ Entrar a la cocina</button>
+    <div id="start-status"></div>
+    <p class="hint">Se solicitará permiso de cámara. Ubícate en un lugar con buena luz y muestra ambas manos frente a la webcam para mejores resultados.</p>
+  </div>
+</div>
+
+<!-- ============================================================
+     HUD DE JUEGO (oculto hasta iniciar)
+     ============================================================ -->
+<div id="hud" class="hidden">
+  <button id="restart-btn">⟲ Reiniciar</button>
+  <button id="cardboard-btn">🥽 Modo Cartón</button>
+
+  <div id="top-left">
+    <div id="score-box">🪙 <span id="score">0</span></div>
+    <div id="hand-status">
+      <span id="status-text">Iniciando cámara…</span>
+      <div class="hand-row">
+        <span class="hand-label">Izq</span>
+        <div class="pinch-bar"><div id="pinch-l" class="pinch-fill"></div></div>
+      </div>
+      <div class="hand-row">
+        <span class="hand-label">Der</span>
+        <div class="pinch-bar"><div id="pinch-r" class="pinch-fill"></div></div>
+      </div>
+    </div>
+  </div>
+
+  <div id="order-ticket">
+    <h3>📋 PEDIDO</h3>
+    <div id="order-name">—</div>
+    <ul id="order-items"></ul>
+  </div>
+
+  <div id="tutorial-panel">
+    <span id="tutorial-icon">👉</span>
+    <span id="tutorial-text">Cargando pedido…</span>
+  </div>
+
+  <div id="stove-indicator">🔥 Estufa: <b id="stove-state">Apagada</b></div>
+  <div id="held-info">Manos vacías</div>
+
+  <div id="toast-wrap"></div>
+
+  <div id="controls-hint">WASD mover · ←→ girar · ↑↓ mirar · C agacharse · pinza = agarrar</div>
+</div>
+
+<!-- ============================================================
+     MODO CARTÓN — divisor central para alinear el celular dentro
+     de las gafas, y un botón de salida por cada ojo (en estéreo
+     cada mitad de la pantalla se ve por separado). Van FUERA de
+     #hud a propósito: #hud se oculta entero en modo cartón (ver
+     styles.css), pero esto debe seguir visible.
+     ============================================================ -->
+<div id="cardboard-divider"></div>
+<div id="cardboard-exit">
+  <button class="btn-l">✕ Salir</button>
+  <button class="btn-r">✕ Salir</button>
+</div>
+
+<!-- ── tracking.js: detección de manos (MediaPipe, cámara trasera) ── -->
+<script>
+/* ============================================================
+   TRACKING.JS — Visión por computadora y reconocimiento de gestos
+   ============================================================
+   Usa la cámara TRASERA del dispositivo (facingMode:'environment'), no
+   la frontal/selfie. Por eso las coordenadas NO se espejan: la mano
+   derecha real del usuario cae a la derecha en pantalla, igual que en
+   cualquier app de cámara trasera normal.
+
+   Responsabilidad de este archivo (y SOLO esto):
+     1) Encender la cámara y alimentar MediaPipe Hands.
+     2) Convertir los 21 landmarks de cada mano en un estado de
+        gestos limpio y fácil de consumir: posición de la palma,
+        fuerza de "pinza" (0..1), si está agarrando o no (con
+        histéresis para evitar parpadeos) y un detector de golpe
+        rápido hacia abajo (usado como gesto de "cortar").
+     3) Exponer todo eso en `window.HandTracking` para que
+        game.js pueda leerlo cada frame sin saber nada de
+        MediaPipe.
+
+   No hay aquí ninguna referencia a Three.js, a la escena del
+   restaurante ni a mecánicas de juego — eso vive en game.js.
+   ============================================================ */
+
+const HandTracking = (() => {
+
+  const videoEl = document.getElementById('video');
+
+  let mpHands = null;
+  let mpCamera = null;
+  let isReady = false;
+  let statusCallback = null;
+
+  // ---------- utilidades numéricas ----------
+  function clamp(x, a, b) { return Math.max(a, Math.min(b, x)); }
+  function lerp(a, b, t) { return a + (b - a) * t; }
+
+  // Landmarks clave de MediaPipe Hands que usamos:
+  //  0 = muñeca, 4 = punta del pulgar, 8 = punta del índice
+  //  5,9,13,17 = base de los otros cuatro dedos (para el centro de palma)
+  const PALM_IDX = [0, 1, 5, 9, 13, 17];
+
+  // Umbrales de la pinza (distancia normalizada pulgar-índice).
+  // Histéresis (ON > OFF) para que el gesto no "tiemble" cerca del límite.
+  const PINCH_ON = 0.62;
+  const PINCH_OFF = 0.42;
+  const PINCH_NEAR = 0.11; // distancia (normalizada) considerada "dedos juntos"
+  const PINCH_FAR = 0.02;  // distancia mínima físicamente posible entre puntas
+
+  // Umbral de velocidad vertical de la palma para detectar un "golpe de picar".
+  // Se expresa en unidades normalizadas de imagen por frame, suavizado.
+  const CHOP_VELOCITY_THRESHOLD = 0.028;
+
+  function makeHandState(label) {
+    return {
+      label,                 // 'left' | 'right'
+      detected: false,       // ¿la mano está visible este frame?
+      landmarks: null,       // 21 puntos {x,y,z} normalizados, tal cual los ve la cámara trasera (sin espejo)
+      palm: { x: 0.5, y: 0.5, z: 0 },
+      pinchDist: 1,
+      pinch: 0,              // 0..1 suavizado, qué tan cerrada está la pinza
+      isPinching: false,     // true mientras se mantiene el agarre
+      pinchStarted: false,   // true SOLO en el frame donde empezó el agarre
+      pinchEnded: false,     // true SOLO en el frame donde se soltó
+      chopSpike: false,      // true en el frame de un golpe rápido hacia abajo
+      rollAngle: 0,          // ángulo (rad) del eje muñeca->nudillos en el plano de la imagen,
+                              // usado para detectar el gesto de "girar la perilla" de la estufa
+      rollValid: false,      // true si rollAngle se pudo calcular este frame (mano detectada)
+      _wasPinching: false,
+      _velY: 0,
+      _prevPalmY: null
+    };
+  }
+
+  // Diferencia angular con signo, segura ante el salto -PI/PI (rango resultante: -PI..PI).
+  function angleDiff(a, b) {
+    let d = a - b;
+    while (d > Math.PI) d -= Math.PI * 2;
+    while (d < -Math.PI) d += Math.PI * 2;
+    return d;
+  }
+
+  const hands = {
+    left: makeHandState('left'),
+    right: makeHandState('right')
+  };
+
+  function palmCenter(lm) {
+    let sx = 0, sy = 0, sz = 0;
+    for (const i of PALM_IDX) { sx += lm[i].x; sy += lm[i].y; sz += lm[i].z; }
+    const n = PALM_IDX.length;
+    return { x: sx / n, y: sy / n, z: sz / n };
+  }
+
+  function updateHandFromLandmarks(h, rawLandmarks) {
+    // Cámara TRASERA (no selfie): la imagen ya llega "natural", sin espejo.
+    // Aquí NO se invierte X — al revés que con una cámara frontal, esto hace
+    // que tu mano derecha real quede a la derecha en la pantalla.
+    const lm = rawLandmarks.map(p => ({ x: p.x, y: p.y, z: p.z }));
+    h.landmarks = lm;
+    h.detected = true;
+    h.palm = palmCenter(lm);
+
+    const thumb = lm[4], index = lm[8];
+    const dx = thumb.x - index.x, dy = thumb.y - index.y;
+    h.pinchDist = Math.hypot(dx, dy);
+
+    // Ángulo de "giro de muñeca" (como girar una perilla): vector entre la
+    // base del índice (5) y la base del meñique (17), proyectado en el plano
+    // de la imagen. Al rotar el antebrazo frente a la cámara, este vector
+    // gira junto con la mano — es una señal mucho más estable e intencional
+    // que la sola posición de la palma para detectar "giró a la derecha /
+    // a la izquierda", evitando activaciones accidentales de la estufa.
+    const idxBase = lm[5], pinkyBase = lm[17];
+    h.rollAngle = Math.atan2(pinkyBase.y - idxBase.y, pinkyBase.x - idxBase.x);
+    h.rollValid = true;
+
+    const raw = clamp((PINCH_NEAR - h.pinchDist) / (PINCH_NEAR - PINCH_FAR), 0, 1);
+    h.pinch = lerp(h.pinch, raw, 0.35);
+
+    h._wasPinching = h.isPinching;
+    if (!h.isPinching && h.pinch > PINCH_ON) h.isPinching = true;
+    if (h.isPinching && h.pinch < PINCH_OFF) h.isPinching = false;
+    h.pinchStarted = h.isPinching && !h._wasPinching;
+    h.pinchEnded = !h.isPinching && h._wasPinching;
+
+    // Detector de "golpe de picar": velocidad vertical de la palma.
+    if (h._prevPalmY != null) {
+      const vy = h.palm.y - h._prevPalmY; // positivo = moviéndose hacia abajo
+      h._velY = lerp(h._velY, vy, 0.6);
+      h.chopSpike = h._velY > CHOP_VELOCITY_THRESHOLD;
+    } else {
+      h.chopSpike = false;
+    }
+    h._prevPalmY = h.palm.y;
+  }
+
+  function decayHand(h) {
+    // La mano salió de cuadro: no la "soltamos" de golpe, sino que
+    // dejamos que la pinza decaiga suavemente para evitar sueltos falsos
+    // por un parpadeo de un solo frame en la detección.
+    h.detected = false;
+    h.landmarks = null;
+    h._wasPinching = h.isPinching;
+    h.pinch = lerp(h.pinch, 0, 0.25);
+    if (h.isPinching && h.pinch < PINCH_OFF) h.isPinching = false;
+    h.pinchStarted = false;
+    h.pinchEnded = !h.isPinching && h._wasPinching;
+    h.chopSpike = false;
+    h.rollValid = false;
+    h._prevPalmY = null;
+  }
+
+  function onResults(results) {
+    const seen = { left: false, right: false };
+
+    if (results.multiHandLandmarks && results.multiHandLandmarks.length) {
+      const handedness = results.multiHandedness || [];
+      for (let i = 0; i < results.multiHandLandmarks.length && i < 2; i++) {
+        let label = i === 0 ? 'left' : 'right';
+        if (handedness[i] && handedness[i].label) {
+          // MediaPipe calcula "Left"/"Right" asumiendo una cámara frontal
+          // espejada (selfie). Con la cámara TRASERA (imagen sin espejo)
+          // esa etiqueta queda invertida respecto a la mano real, así que
+          // se intercambia aquí para que corresponda a la mano anatómica.
+          label = handedness[i].label === 'Left' ? 'right' : 'left';
+        }
+        updateHandFromLandmarks(hands[label], results.multiHandLandmarks[i]);
+        seen[label] = true;
+      }
+    }
+    if (!seen.left) decayHand(hands.left);
+    if (!seen.right) decayHand(hands.right);
+
+    if (statusCallback) statusCallback(hands);
+  }
+
+  async function start() {
+    mpHands = new Hands({
+      locateFile: (f) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands@0.4/${f}`
+    });
+    mpHands.setOptions({
+      maxNumHands: 2,
+      modelComplexity: 1,
+      minDetectionConfidence: 0.6,
+      minTrackingConfidence: 0.6
+    });
+    mpHands.onResults(onResults);
+
+    mpCamera = new Camera(videoEl, {
+      onFrame: async () => { await mpHands.send({ image: videoEl }); },
+      // Cámara TRASERA del dispositivo móvil (no la frontal/selfie).
+      // 'environment' es una preferencia "ideal": si el dispositivo no
+      // tiene cámara trasera (p. ej. un portátil), el navegador cae de
+      // vuelta a la única cámara disponible en vez de fallar.
+      facingMode: 'environment',
+      width: 640,
+      height: 480
+    });
+
+    await mpCamera.start();
+    isReady = true;
+  }
+
+  return {
+    hands,
+    start,
+    angleDiff,
+    get ready() { return isReady; },
+    onStatus(cb) { statusCallback = cb; }
+  };
+})();
+
+window.HandTracking = HandTracking;
+</script>
+
+<!-- ── world.js: escena 3D, cocina y zonas de interacción ── -->
+<script>
+/* ============================================================
+   WORLD.JS — Entorno 3D de la cocina de restaurante
+   ============================================================
+   Responsabilidad de este archivo (y SOLO esto):
+     1) Crear la escena, cámara y renderer de Three.js.
+     2) Construir la geometría estática del local: piso, paredes,
+        techo con iluminación empotrada, mostrador, estufa,
+        nevera, fregadero, estante de despensa, estante de
+        utensilios, ventanilla de servicio, entrada y mobiliario
+        decorativo — con una estética moderna y luminosa de
+        cocina de restaurante (nada de madera rústica ni
+        iluminación tipo "cueva").
+     3) Definir las ZONAS de interacción (ZONE) y los
+        colisionadores de movimiento, en un único lugar para que
+        geometría e interacción nunca se desincronicen.
+
+   Este archivo NO conoce mecánicas de juego ni gestos de mano:
+   solo expone `window.World` con lo que game.js/items.js/guide.js
+   necesitan para trabajar sobre este entorno.
+   ============================================================ */
+
+const World = (() => {
+
+  // ---------- utilidades numéricas compartidas ----------
+  function clamp(x, a, b) { return Math.max(a, Math.min(b, x)); }
+  function lerp(a, b, t) { return a + (b - a) * t; }
+  function rand(a, b) { return a + Math.random() * (b - a); }
+
+  function makeTexture(draw, size = 128, repeat = [1, 1]) {
+    const c = document.createElement('canvas');
+    c.width = c.height = size;
+    draw(c.getContext('2d'), size);
+    const t = new THREE.CanvasTexture(c);
+    t.wrapS = t.wrapT = THREE.RepeatWrapping;
+    t.repeat.set(repeat[0], repeat[1]);
+    t.colorSpace = THREE.SRGBColorSpace;
+    return t;
+  }
+
+  function makeTextPanel(line1, line2, w = 512, h = 192, opts = {}) {
+    const c = document.createElement('canvas');
+    c.width = w; c.height = h;
+    const ctx = c.getContext('2d');
+    ctx.fillStyle = opts.bg || '#1c2126'; ctx.fillRect(0, 0, w, h);
+    ctx.strokeStyle = opts.border || '#7fd7c4'; ctx.lineWidth = 6; ctx.strokeRect(6, 6, w - 12, h - 12);
+    ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    ctx.fillStyle = opts.color1 || '#f4faf8';
+    ctx.font = `bold ${opts.size1 || 44}px Segoe UI, Arial, sans-serif`;
+    ctx.fillText(line1, w / 2, h / 2 - (line2 ? 24 : 0));
+    if (line2) {
+      ctx.font = `${opts.size2 || 24}px Segoe UI, Arial, sans-serif`;
+      ctx.fillStyle = opts.color2 || '#9fd8c9';
+      ctx.fillText(line2, w / 2, h / 2 + 34);
+    }
+    const t = new THREE.CanvasTexture(c);
+    t.colorSpace = THREE.SRGBColorSpace;
+    return t;
+  }
+
+  // ══════════════════════════════════════════════════════════
+  // TEXTURAS DEL ENTORNO — cocina de restaurante COLORIDA: piso a
+  // cuadros mostaza/crema, paredes en terracota + azulejo teal,
+  // acero inoxidable cepillado solo en el equipo funcional.
+  // ══════════════════════════════════════════════════════════
+  const TX_FLOOR = makeTexture((ctx, s) => {
+    // Piso a cuadros (estilo diner): mostaza y crema alternados.
+    const half = s / 2;
+    ctx.fillStyle = '#e7d3a1'; ctx.fillRect(0, 0, s, s);
+    ctx.fillStyle = '#d99a34';
+    ctx.fillRect(0, 0, half, half);
+    ctx.fillRect(half, half, half, half);
+    ctx.strokeStyle = 'rgba(40,30,10,.28)'; ctx.lineWidth = 3; ctx.strokeRect(1.5, 1.5, s - 3, s - 3);
+    for (let i = 0; i < 60; i++) {
+      const v = (Math.random() * 16 | 0) - 8;
+      ctx.fillStyle = `rgba(${180 + v},${140 + v},${80 + v},.4)`;
+      ctx.fillRect(Math.random() * s, Math.random() * s, 2, 2);
+    }
+  }, 128, [10, 10]);
+
+  const TX_WALL = makeTexture((ctx, s) => {
+    // Zócalo de azulejo teal (40% inferior) + pintura terracota (60% superior)
+    const tileH = s * 0.42;
+    ctx.fillStyle = '#e0623f'; ctx.fillRect(0, 0, s, s - tileH);
+    ctx.fillStyle = '#1f9d8a'; ctx.fillRect(0, s - tileH, s, tileH);
+    ctx.strokeStyle = 'rgba(255,255,255,.22)'; ctx.lineWidth = 2;
+    const cols = 4, rows = 3;
+    for (let r = 0; r < rows; r++) {
+      const y = s - tileH + (r / rows) * tileH;
+      ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(s, y); ctx.stroke();
+      for (let c = 0; c < cols; c++) {
+        const x = ((c + (r % 2 ? 0.5 : 0)) / cols) * s;
+        ctx.beginPath(); ctx.moveTo(x, y); ctx.lineTo(x, y + tileH / rows); ctx.stroke();
+      }
+    }
+    ctx.strokeStyle = 'rgba(20,20,15,.3)'; ctx.lineWidth = 3;
+    ctx.beginPath(); ctx.moveTo(0, s - tileH); ctx.lineTo(s, s - tileH); ctx.stroke();
+    for (let i = 0; i < 30; i++) {
+      const v = (Math.random() * 18 | 0) - 9;
+      ctx.fillStyle = `rgba(${255},${200 + v},${170 + v},.18)`;
+      ctx.fillRect(Math.random() * s, Math.random() * (s - tileH), 3, 3);
+    }
+  }, 128, [7, 1]);
+
+  const TX_STEEL = makeTexture((ctx, s) => {
+    ctx.fillStyle = '#c7ccd2'; ctx.fillRect(0, 0, s, s);
+    for (let y = 0; y < s; y += 2) {
+      const v = (Math.random() * 18 | 0) - 9;
+      ctx.fillStyle = `rgba(${170 + v},${176 + v},${182 + v},.55)`;
+      ctx.fillRect(0, y, s, 1);
+    }
+    ctx.strokeStyle = 'rgba(255,255,255,.35)'; ctx.lineWidth = 1;
+    ctx.strokeRect(0.5, 0.5, s - 1, s - 1);
+  }, 64, [5, 1]);
+
+  const TX_WOOD = makeTexture((ctx, s) => {
+    ctx.fillStyle = '#8a5a30'; ctx.fillRect(0, 0, s, s);
+    for (let y = 0; y < s; y += 4) {
+      ctx.fillStyle = (y % 8 === 0) ? '#6d4322' : '#9c6a3a';
+      ctx.fillRect(0, y, s, 2);
+    }
+  }, 64, [3, 1]);
+
+  // ══════════════════════════════════════════════════════════
+  // ESCENA / CÁMARA / RENDERER
+  // ══════════════════════════════════════════════════════════
+  const canvasEl = document.getElementById('scene');
+  const scene = new THREE.Scene();
+
+  const camera = new THREE.PerspectiveCamera(65, innerWidth / innerHeight, 0.05, 80);
+
+  const renderer = new THREE.WebGLRenderer({ canvas: canvasEl, antialias: true, alpha: true });
+  renderer.setPixelRatio(Math.min(devicePixelRatio || 1, 2));
+  renderer.setSize(innerWidth, innerHeight);
+  renderer.setClearColor(0x000000, 0);
+  renderer.outputColorSpace = THREE.SRGBColorSpace;
+  renderer.toneMapping = THREE.ACESFilmicToneMapping;
+  renderer.toneMappingExposure = 1.05;
+
+  window.addEventListener('resize', () => {
+    camera.aspect = innerWidth / innerHeight;
+    camera.updateProjectionMatrix();
+    renderer.setSize(innerWidth, innerHeight);
+  });
+
+  // ---------- Iluminación: brillante, pareja, "profesional" ----------
+  // Luz ambiental + hemisférica altas para eliminar el look oscuro de
+  // cueva; varios focos de techo empotrados simulan paneles LED reales.
+  // NOTA: Three.js r160 usa iluminación físicamente correcta por defecto
+  // (PointLight en candelas, con caída por distancia al cuadrado). Por eso
+  // las luces de techo usan decay:0 e intensidades más altas — con los
+  // valores "de juego" clásicos (~1) la cocina se ve oscura a poca distancia.
+  scene.add(new THREE.AmbientLight(0xffffff, 0.6));
+  scene.add(new THREE.HemisphereLight(0xffffff, 0xd8dee4, 0.5));
+  const keyLight = new THREE.DirectionalLight(0xffffff, 0.45);
+  keyLight.position.set(3, 6, 4);
+  scene.add(keyLight);
+
+  // ══════════════════════════════════════════════════════════
+  // DISTRIBUCIÓN DE LA COCINA (constantes de layout)
+  // Cocina amplia: 10.8 x 10.8 m (antes 8 x 8) y techo más alto.
+  // ══════════════════════════════════════════════════════════
+  const ROOM_HALF = 5.4;
+  const WALL_H = 3.2;
+  const BACK_WALL_Z = -ROOM_HALF;
+  const COUNTER_DEPTH = 0.7;
+  const COUNTER_TOP_Y = 0.95;
+  const PLAYER_EYE = 1.62;
+  const PLAYER_RADIUS = 0.3;
+  const STOVE_CX = -3.6;
+
+  const ZONE = {
+    stoveButton: { pos: new THREE.Vector3(STOVE_CX, 1.22, BACK_WALL_Z + COUNTER_DEPTH - 0.03), r: 0.2 },
+    burners: [
+      { pos: new THREE.Vector3(STOVE_CX - 0.45, COUNTER_TOP_Y, BACK_WALL_Z + 0.18), r: 0.24 },
+      { pos: new THREE.Vector3(STOVE_CX + 0.45, COUNTER_TOP_Y, BACK_WALL_Z + 0.18), r: 0.24 },
+      { pos: new THREE.Vector3(STOVE_CX - 0.45, COUNTER_TOP_Y, BACK_WALL_Z + 0.5), r: 0.24 },
+      { pos: new THREE.Vector3(STOVE_CX + 0.45, COUNTER_TOP_Y, BACK_WALL_Z + 0.5), r: 0.24 }
+    ],
+    board: { pos: new THREE.Vector3(-1.9, COUNTER_TOP_Y, BACK_WALL_Z + 0.45), r: 0.42 },
+    sink: { pos: new THREE.Vector3(-0.9, COUNTER_TOP_Y, BACK_WALL_Z + 0.45), r: 0.4 },
+    assembly: { pos: new THREE.Vector3(0.0, COUNTER_TOP_Y, BACK_WALL_Z + 0.45), r: 0.42 },
+    blender: { pos: new THREE.Vector3(0.85, COUNTER_TOP_Y + 0.22, BACK_WALL_Z + 0.42), r: 0.22 },
+    plateStack: { pos: new THREE.Vector3(1.9, COUNTER_TOP_Y + 0.05, BACK_WALL_Z + 0.4), r: 0.32 },
+    pass: { pos: new THREE.Vector3(ROOM_HALF - 0.45, 1.05, 0.1), r: 0.5 },
+    fridgeHandle: { pos: new THREE.Vector3(-ROOM_HALF + 0.81, 1.2, -4.32), r: 0.5 },
+    entranceHandle: { pos: new THREE.Vector3(ROOM_HALF - 0.1, 1.2, -4.15), r: 0.4 },
+    trash: { pos: new THREE.Vector3(ROOM_HALF - 0.65, 0.55, -3.3), r: 0.42 },
+    pantrySlots: [
+      { kind: 'tomato', pos: new THREE.Vector3(-ROOM_HALF + 0.38, 1.75, 0.2) },
+      { kind: 'lettuce', pos: new THREE.Vector3(-ROOM_HALF + 0.38, 1.75, 1.4) },
+      { kind: 'cheese', pos: new THREE.Vector3(-ROOM_HALF + 0.38, 1.75, 2.6) },
+      { kind: 'meat', pos: new THREE.Vector3(-ROOM_HALF + 0.38, 1.15, 0.8) },
+      { kind: 'bun', pos: new THREE.Vector3(-ROOM_HALF + 0.38, 1.15, 2.0) }
+    ],
+    utensilSlots: {
+      knife: new THREE.Vector3(ROOM_HALF - 0.38, 1.42, 2.0),
+      spatula: new THREE.Vector3(ROOM_HALF - 0.38, 1.42, 2.8),
+      ladle: new THREE.Vector3(ROOM_HALF - 0.38, 1.42, 3.6)
+    }
+  };
+
+  // ---------- Colisionadores simples (AABB en XZ) para caminar ----------
+  const colliders = [];
+  function addCollider(minX, maxX, minZ, maxZ) { colliders.push({ minX, maxX, minZ, maxZ }); }
+  addCollider(-ROOM_HALF + 0.5, ROOM_HALF - 0.5, BACK_WALL_Z, BACK_WALL_Z + COUNTER_DEPTH); // mostrador continuo
+  addCollider(-ROOM_HALF, -ROOM_HALF + 0.75, -4.9, -3.4);      // nevera
+  addCollider(-ROOM_HALF, -ROOM_HALF + 0.5, -0.3, 3.0);        // despensa
+  addCollider(ROOM_HALF - 0.5, ROOM_HALF, -0.85, 0.95);        // ventanilla de servicio
+  addCollider(ROOM_HALF - 0.5, ROOM_HALF, 1.5, 4.1);           // estante de utensilios
+  addCollider(ROOM_HALF - 0.75, ROOM_HALF, -3.6, -3.0);        // caneca de basura
+  addCollider(3.85, 4.55, 4.25, 4.95);                         // mesa de café decorativa
+
+  function resolvePlayerXZ(newX, newZ) {
+    let x = newX, z = newZ;
+    const r = PLAYER_RADIUS;
+    for (const c of colliders) {
+      if (x > c.minX - r && x < c.maxX + r && z > c.minZ - r && z < c.maxZ + r) {
+        const penLeft = x - (c.minX - r);
+        const penRight = (c.maxX + r) - x;
+        const penTop = z - (c.minZ - r);
+        const penBot = (c.maxZ + r) - z;
+        const minPen = Math.min(penLeft, penRight, penTop, penBot);
+        if (minPen === penLeft) x = c.minX - r;
+        else if (minPen === penRight) x = c.maxX + r;
+        else if (minPen === penTop) z = c.minZ - r;
+        else z = c.maxZ + r;
+      }
+    }
+    const bound = ROOM_HALF - 0.15;
+    x = clamp(x, -bound, bound);
+    z = clamp(z, -bound, bound);
+    return { x, z };
+  }
+
+  // ══════════════════════════════════════════════════════════
+  // CONSTRUCCIÓN DEL ENTORNO
+  // ══════════════════════════════════════════════════════════
+  function buildBox(w, h, d, cx, cy, cz, material) {
+    const mesh = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), material);
+    mesh.position.set(cx, cy, cz);
+    scene.add(mesh);
+    return mesh;
+  }
+
+  function buildShelfUnitZ(x, z0, z1, height, depth, tiers, dir, frameMat) {
+    const length = Math.abs(z1 - z0);
+    const cz = (z0 + z1) / 2;
+    [z0, z1].forEach(z => {
+      const side = new THREE.Mesh(new THREE.BoxGeometry(depth, height, 0.04), frameMat);
+      side.position.set(x + dir * depth / 2, height / 2, z);
+      scene.add(side);
+    });
+    const back = new THREE.Mesh(new THREE.BoxGeometry(0.03, height, length), frameMat);
+    back.position.set(x + dir * 0.015, height / 2, cz);
+    scene.add(back);
+    tiers.forEach(y => {
+      const shelf = new THREE.Mesh(new THREE.BoxGeometry(depth, 0.03, length), frameMat);
+      shelf.position.set(x + dir * depth / 2, y, cz);
+      scene.add(shelf);
+    });
+  }
+
+  const counterMat = new THREE.MeshStandardMaterial({ map: TX_STEEL, roughness: 0.4, metalness: 0.55 });
+  const steelMat = new THREE.MeshStandardMaterial({ color: 0xcfd4d9, roughness: 0.35, metalness: 0.7 });
+  const darkSteelMat = new THREE.MeshStandardMaterial({ color: 0x4b5157, roughness: 0.4, metalness: 0.5 });
+  const whiteMat = new THREE.MeshStandardMaterial({ color: 0xf6f7f5, roughness: 0.45 });
+  const woodMat = new THREE.MeshStandardMaterial({ map: TX_WOOD, roughness: 0.65 });
+  // Paleta de color de la cocina (gabinetes, nevera, estantes, puertas)
+  const cabinetMat = new THREE.MeshStandardMaterial({ color: 0x1f9d8a, roughness: 0.55 });   // teal
+  const accentMat = new THREE.MeshStandardMaterial({ color: 0xe0623f, roughness: 0.5 });     // terracota
+  const shelfMat = new THREE.MeshStandardMaterial({ color: 0xd99a34, roughness: 0.6 });      // mostaza
+
+  // ---------- Piso, paredes, techo con paneles de luz empotrados ----------
+  (function buildShell() {
+    const floor = new THREE.Mesh(
+      new THREE.PlaneGeometry(ROOM_HALF * 2, ROOM_HALF * 2),
+      new THREE.MeshStandardMaterial({ map: TX_FLOOR, roughness: 0.5, metalness: 0.05 })
+    );
+    floor.rotation.x = -Math.PI / 2;
+    scene.add(floor);
+
+    const wallMat = new THREE.MeshStandardMaterial({ map: TX_WALL, roughness: 0.85, side: THREE.DoubleSide });
+    function wall(cx, cz, rotY) {
+      const m = new THREE.Mesh(new THREE.PlaneGeometry(ROOM_HALF * 2, WALL_H), wallMat);
+      m.position.set(cx, WALL_H / 2, cz);
+      m.rotation.y = rotY;
+      scene.add(m);
+    }
+    wall(0, BACK_WALL_Z, 0);
+    wall(0, ROOM_HALF, Math.PI);
+    wall(-ROOM_HALF, 0, Math.PI / 2);
+    wall(ROOM_HALF, 0, -Math.PI / 2);
+
+    const ceiling = new THREE.Mesh(
+      new THREE.PlaneGeometry(ROOM_HALF * 2, ROOM_HALF * 2),
+      new THREE.MeshStandardMaterial({ color: 0xf5ead9, roughness: 0.9, side: THREE.DoubleSide })
+    );
+    ceiling.rotation.x = Math.PI / 2;
+    ceiling.position.y = WALL_H;
+    scene.add(ceiling);
+
+    // Paneles de luz LED empotrados en el techo (rejilla 3x3) — la
+    // principal fuente de una iluminación pareja y "de restaurante".
+    const panelMat = new THREE.MeshBasicMaterial({ color: 0xffffff });
+    for (const px of [-3, 0, 3]) {
+      for (const pz of [-3.6, 0, 3.6]) {
+        const panel = new THREE.Mesh(new THREE.PlaneGeometry(0.9, 0.9), panelMat);
+        panel.rotation.x = Math.PI / 2;
+        panel.position.set(px, WALL_H - 0.02, pz);
+        scene.add(panel);
+        const bulb = new THREE.PointLight(0xffffff, 0.9, 7, 0);
+        bulb.position.set(px, WALL_H - 0.15, pz);
+        scene.add(bulb);
+      }
+    }
+
+    // Ventanal frontal grande (luz natural, look luminoso)
+    const win = new THREE.Mesh(
+      new THREE.PlaneGeometry(2.0, 1.4),
+      new THREE.MeshStandardMaterial({ color: 0xeaf6ff, emissive: 0xcfeeff, emissiveIntensity: 0.7 })
+    );
+    win.position.set(-3.4, 2.0, ROOM_HALF - 0.02);
+    win.rotation.y = Math.PI;
+    scene.add(win);
+    [-0.35, 0.35].forEach(off => {
+      const mullion = new THREE.Mesh(new THREE.BoxGeometry(0.05, 1.4, 0.05), darkSteelMat);
+      mullion.position.set(-3.4 + off, 2.0, ROOM_HALF - 0.02);
+      scene.add(mullion);
+    });
+
+    // Letrero "COCINA"
+    const sign = new THREE.Mesh(new THREE.PlaneGeometry(1.8, 0.6),
+      new THREE.MeshBasicMaterial({ map: makeTextPanel('COCINA', 'Restaurante VR', 512, 192, { bg: '#20262b', border: '#7fd7c4' }), transparent: true }));
+    sign.position.set(0, 2.85, BACK_WALL_Z + 0.02);
+    scene.add(sign);
+  })();
+
+  // ---------- Mostrador principal: gabinete de color + tapa de acero ----------
+  const counterCX = 0, counterCZ = BACK_WALL_Z + COUNTER_DEPTH / 2;
+  const COUNTER_LEN = ROOM_HALF * 2 - 1.0;
+  const COUNTER_TOP_SLAB = 0.08;
+  buildBox(COUNTER_LEN, COUNTER_TOP_Y - COUNTER_TOP_SLAB, COUNTER_DEPTH, counterCX, (COUNTER_TOP_Y - COUNTER_TOP_SLAB) / 2, counterCZ, cabinetMat);
+  buildBox(COUNTER_LEN, COUNTER_TOP_SLAB, COUNTER_DEPTH + 0.02, counterCX, COUNTER_TOP_Y - COUNTER_TOP_SLAB / 2, counterCZ, counterMat);
+
+  // ---------- Estufa detallada: cuerpo, 4 fogones, botón único, campana ----------
+  buildBox(2.0, 0.1, COUNTER_DEPTH * 0.95, STOVE_CX, COUNTER_TOP_Y + 0.03, counterCZ, darkSteelMat);
+
+  const burnerRingMat = new THREE.MeshStandardMaterial({ color: 0x1a1a1a, roughness: 0.45, metalness: 0.35 });
+  ZONE.burners.forEach(b => {
+    const outer = new THREE.Mesh(new THREE.TorusGeometry(0.15, 0.018, 8, 20), burnerRingMat);
+    outer.rotation.x = Math.PI / 2;
+    outer.position.set(b.pos.x, COUNTER_TOP_Y + 0.09, b.pos.z);
+    scene.add(outer);
+    const inner = new THREE.Mesh(new THREE.TorusGeometry(0.08, 0.012, 6, 16), burnerRingMat);
+    inner.rotation.x = Math.PI / 2;
+    inner.position.set(b.pos.x, COUNTER_TOP_Y + 0.09, b.pos.z);
+    scene.add(inner);
+    for (let i = 0; i < 6; i++) {
+      const spoke = new THREE.Mesh(new THREE.BoxGeometry(0.14, 0.012, 0.012), burnerRingMat);
+      spoke.position.set(b.pos.x, COUNTER_TOP_Y + 0.095, b.pos.z);
+      spoke.rotation.y = (i / 6) * Math.PI;
+      scene.add(spoke);
+    }
+  });
+
+  // Panel de control frontal con la perilla giratoria de encendido
+  buildBox(2.0, 0.16, 0.05, STOVE_CX, COUNTER_TOP_Y + 0.16, BACK_WALL_Z + COUNTER_DEPTH - 0.025, darkSteelMat);
+
+  const knobSocket = new THREE.Mesh(new THREE.CylinderGeometry(0.055, 0.055, 0.02, 20), new THREE.MeshStandardMaterial({ color: 0x111214, roughness: 0.5 }));
+  knobSocket.rotation.x = Math.PI / 2;
+  knobSocket.position.copy(ZONE.stoveButton.pos).add(new THREE.Vector3(0, 0, -0.015));
+  scene.add(knobSocket);
+
+  const stoveButtonMat = new THREE.MeshStandardMaterial({ color: 0xcc2222, emissive: 0x000000, emissiveIntensity: 0, roughness: 0.3, metalness: 0.3 });
+  const stoveButtonMesh = new THREE.Mesh(new THREE.CylinderGeometry(0.042, 0.042, 0.028, 20), stoveButtonMat);
+  stoveButtonMesh.rotation.x = Math.PI / 2;
+  stoveButtonMesh.position.copy(ZONE.stoveButton.pos);
+  scene.add(stoveButtonMesh);
+  // Marca indicadora de dirección en la perilla (para leer visualmente el giro)
+  const knobMark = new THREE.Mesh(new THREE.BoxGeometry(0.008, 0.03, 0.01), new THREE.MeshStandardMaterial({ color: 0xffffff }));
+  knobMark.position.copy(ZONE.stoveButton.pos).add(new THREE.Vector3(0, 0.014, -0.012));
+  stoveButtonMesh.add(knobMark);
+  const powerLabel = new THREE.Mesh(new THREE.PlaneGeometry(0.22, 0.09),
+    new THREE.MeshBasicMaterial({ map: makeTextPanel('◀ APAGAR   ENCENDER ▶', '', 420, 110, { size1: 30, bg: '#20262b', border: '#7fd7c4' }), transparent: true }));
+  powerLabel.position.copy(ZONE.stoveButton.pos).add(new THREE.Vector3(0, -0.13, -0.02));
+  scene.add(powerLabel);
+
+  // Llamas de los 4 fogones (ocultas hasta encender la estufa)
+  const flameMat = new THREE.MeshStandardMaterial({ color: 0xff7b1a, emissive: 0xff5500, emissiveIntensity: 1.4, transparent: true, opacity: 0.85 });
+  const flames = ZONE.burners.map(b => {
+    const g = new THREE.Group();
+    for (let i = 0; i < 3; i++) {
+      const cone = new THREE.Mesh(new THREE.ConeGeometry(0.05 - i * 0.008, 0.14 - i * 0.02, 8), flameMat);
+      cone.position.y = i * 0.01;
+      cone.rotation.y = i;
+      g.add(cone);
+    }
+    g.position.set(b.pos.x, COUNTER_TOP_Y + 0.14, b.pos.z);
+    g.visible = false;
+    scene.add(g);
+    return g;
+  });
+
+  // Campana extractora de acero
+  buildBox(2.1, 0.5, 0.6, STOVE_CX, 2.75, BACK_WALL_Z + 0.35, steelMat);
+  const hoodPipe = new THREE.Mesh(new THREE.CylinderGeometry(0.14, 0.14, 0.35, 12), steelMat);
+  hoodPipe.position.set(STOVE_CX, 3.05, BACK_WALL_Z + 0.35);
+  scene.add(hoodPipe);
+  const hoodLight = new THREE.PointLight(0xffffff, 0.8, 4, 0);
+  hoodLight.position.set(STOVE_CX, 2.4, BACK_WALL_Z + 0.5);
+  scene.add(hoodLight);
+
+  // Barra de utensilios colgantes bajo la campana (detalle de cocina real)
+  [-0.6, -0.3, 0, 0.3, 0.6].forEach(off => {
+    const rod = new THREE.Mesh(new THREE.CylinderGeometry(0.008, 0.008, 0.18, 6), darkSteelMat);
+    rod.position.set(STOVE_CX + off, 2.35, BACK_WALL_Z + 0.6);
+    scene.add(rod);
+  });
+  const hangRail = new THREE.Mesh(new THREE.CylinderGeometry(0.012, 0.012, 1.6, 8), steelMat);
+  hangRail.rotation.z = Math.PI / 2;
+  hangRail.position.set(STOVE_CX, 2.44, BACK_WALL_Z + 0.6);
+  scene.add(hangRail);
+
+  // ---------- Tabla de picar (acento cálido de madera sobre acero) ----------
+  const boardMesh = new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.03, 0.36), woodMat);
+  boardMesh.position.set(ZONE.board.pos.x, COUNTER_TOP_Y + 0.016, ZONE.board.pos.z);
+  scene.add(boardMesh);
+
+  // ---------- Fregadero de acero inoxidable con grifo (nuevo) ----------
+  (function buildSink() {
+    const basin = new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.16, 0.42), darkSteelMat);
+    basin.position.set(ZONE.sink.pos.x, COUNTER_TOP_Y - 0.05, ZONE.sink.pos.z);
+    scene.add(basin);
+    const basinInner = new THREE.Mesh(new THREE.BoxGeometry(0.42, 0.1, 0.34), new THREE.MeshStandardMaterial({ color: 0x2a2e33, roughness: 0.3, metalness: 0.7 }));
+    basinInner.position.set(ZONE.sink.pos.x, COUNTER_TOP_Y + 0.01, ZONE.sink.pos.z);
+    scene.add(basinInner);
+    const faucetBase = new THREE.Mesh(new THREE.CylinderGeometry(0.018, 0.018, 0.26, 10), steelMat);
+    faucetBase.position.set(ZONE.sink.pos.x, COUNTER_TOP_Y + 0.15, ZONE.sink.pos.z - 0.16);
+    scene.add(faucetBase);
+    const faucetArc = new THREE.Mesh(new THREE.TorusGeometry(0.09, 0.014, 8, 16, Math.PI), steelMat);
+    faucetArc.rotation.z = Math.PI / 2;
+    faucetArc.position.set(ZONE.sink.pos.x, COUNTER_TOP_Y + 0.27, ZONE.sink.pos.z - 0.07);
+    scene.add(faucetArc);
+  })();
+
+  // Marca del mostrador de armado (anillo pintado, guía visual base)
+  const assemblyMark = new THREE.Mesh(new THREE.RingGeometry(0.28, 0.32, 32), new THREE.MeshBasicMaterial({ color: 0x9fd8c9, side: THREE.DoubleSide }));
+  assemblyMark.rotation.x = -Math.PI / 2;
+  assemblyMark.position.set(ZONE.assembly.pos.x, COUNTER_TOP_Y + 0.012, ZONE.assembly.pos.z);
+  scene.add(assemblyMark);
+
+  // ---------- Licuadora (nueva, decorativa/interactiva simple) ----------
+  const blenderBladeGroup = new THREE.Group();
+  (function buildBlender() {
+    const base = new THREE.Mesh(new THREE.CylinderGeometry(0.075, 0.085, 0.09, 16), darkSteelMat);
+    base.position.set(ZONE.blender.pos.x, COUNTER_TOP_Y + 0.045, ZONE.blender.pos.z);
+    scene.add(base);
+    const jar = new THREE.Mesh(new THREE.CylinderGeometry(0.06, 0.05, 0.22, 16),
+      new THREE.MeshPhysicalMaterial({ color: 0xbfe9ff, roughness: 0.15, transmission: 0.6, transparent: true, opacity: 0.55, metalness: 0 }));
+    jar.position.set(ZONE.blender.pos.x, COUNTER_TOP_Y + 0.2, ZONE.blender.pos.z);
+    scene.add(jar);
+    const lid = new THREE.Mesh(new THREE.CylinderGeometry(0.062, 0.062, 0.025, 16), darkSteelMat);
+    lid.position.set(ZONE.blender.pos.x, COUNTER_TOP_Y + 0.32, ZONE.blender.pos.z);
+    scene.add(lid);
+    blenderBladeGroup.add(new THREE.Mesh(new THREE.BoxGeometry(0.08, 0.006, 0.014), steelMat));
+    blenderBladeGroup.position.set(ZONE.blender.pos.x, COUNTER_TOP_Y + 0.1, ZONE.blender.pos.z);
+    scene.add(blenderBladeGroup);
+  })();
+
+  // ---------- Nevera de color (teal), acento de restaurante moderno ----------
+  const fridgeCX = -ROOM_HALF + 0.375, fridgeCZ = -4.15;
+  const fridgeBodyMat = new THREE.MeshStandardMaterial({ color: 0x1f9d8a, roughness: 0.35, metalness: 0.4 });
+  const fridgeBody = buildBox(0.75, 2.15, 1.5, fridgeCX, 1.075, fridgeCZ, fridgeBodyMat);
+  const fridgeDoorGeo = new THREE.BoxGeometry(0.66, 2.0, 0.06);
+  fridgeDoorGeo.translate(0, 0, 0.66 / 2);
+  const fridgeDoorMat = new THREE.MeshStandardMaterial({ color: 0x2bbfa8, roughness: 0.25, metalness: 0.45 });
+  const fridgeDoorMesh = new THREE.Mesh(fridgeDoorGeo, fridgeDoorMat);
+  fridgeDoorMesh.position.set(fridgeCX + 0.375, 1.075, fridgeCZ - 0.75);
+  scene.add(fridgeDoorMesh);
+  const fridgeHandleMesh = new THREE.Mesh(new THREE.BoxGeometry(0.03, 0.4, 0.03), darkSteelMat);
+  fridgeHandleMesh.position.set(0.06, 0, 0.58);
+  fridgeDoorMesh.add(fridgeHandleMesh);
+  // Panel LED táctil (detalle "de restaurante moderno")
+  const fridgePanel = new THREE.Mesh(new THREE.PlaneGeometry(0.14, 0.09),
+    new THREE.MeshBasicMaterial({ map: makeTextPanel('4°C', '', 200, 130, { size1: 42, bg: '#0e1114', border: '#7fd7c4', color1: '#7fd7c4' }), transparent: true }));
+  fridgePanel.position.set(fridgeCX + 0.376, 1.55, fridgeCZ - 0.3);
+  fridgePanel.rotation.y = Math.PI / 2;
+  scene.add(fridgePanel);
+
+  const fridgeBottles = [0xdc3545, 0x1e88e5].map((color, i) => {
+    const bottle = new THREE.Group();
+    const body = new THREE.Mesh(new THREE.CylinderGeometry(0.045, 0.05, 0.22, 12),
+      new THREE.MeshStandardMaterial({ color, roughness: 0.2, metalness: 0.1, transparent: true, opacity: 0.85 }));
+    bottle.add(body);
+    const cap = new THREE.Mesh(new THREE.CylinderGeometry(0.018, 0.018, 0.03, 8), new THREE.MeshStandardMaterial({ color: 0x333333 }));
+    cap.position.y = 0.125;
+    bottle.add(cap);
+    bottle.position.set(fridgeCX + 0.15, 1.35 - i * 0.02, fridgeCZ - 0.4 + i * 0.5);
+    bottle.visible = false;
+    scene.add(bottle);
+    return bottle;
+  });
+
+  // ---------- Despensa (pared izquierda) — alimentos siempre visibles ----------
+  buildShelfUnitZ(-ROOM_HALF, -0.3, 3.0, 2.0, 0.48, [0.6, 1.2, 1.85], 1, shelfMat);
+  const pantrySign = new THREE.Mesh(new THREE.PlaneGeometry(1.0, 0.32),
+    new THREE.MeshBasicMaterial({ map: makeTextPanel('DESPENSA', '', 360, 120, { bg: '#20262b', border: '#7fd7c4' }), transparent: true }));
+  pantrySign.position.set(-ROOM_HALF + 0.02, 2.3, 1.35);
+  pantrySign.rotation.y = Math.PI / 2;
+  scene.add(pantrySign);
+
+  // ---------- Ventanilla de servicio (pared derecha) ----------
+  buildBox(0.5, 0.9, 1.7, ROOM_HALF - 0.25, 0.45, 0.1, counterMat);
+  const passOpening = new THREE.Mesh(new THREE.PlaneGeometry(1.5, 1.1),
+    new THREE.MeshStandardMaterial({ color: 0xffe9c2, emissive: 0xffcf8a, emissiveIntensity: 0.5 }));
+  passOpening.rotation.y = -Math.PI / 2;
+  passOpening.position.set(ROOM_HALF - 0.02, 1.5, 0.1);
+  scene.add(passOpening);
+  const passSign = new THREE.Mesh(new THREE.PlaneGeometry(1.1, 0.4),
+    new THREE.MeshBasicMaterial({ map: makeTextPanel('PASE', 'entrega aquí', 512, 192, { bg: '#20262b', border: '#7fd7c4' }), transparent: true }));
+  passSign.rotation.y = -Math.PI / 2;
+  passSign.position.set(ROOM_HALF - 0.03, 2.1, 0.1);
+  scene.add(passSign);
+
+  // ---------- Puerta doble de entrada (decorativa, pared derecha) ----------
+  const doorLGeo = new THREE.BoxGeometry(0.5, 1.9, 0.05); doorLGeo.translate(0, 0, -0.25);
+  const doorRGeo = new THREE.BoxGeometry(0.5, 1.9, 0.05); doorRGeo.translate(0, 0, 0.25);
+  const doorMat = new THREE.MeshStandardMaterial({ color: 0xe0623f, roughness: 0.5, metalness: 0.2 });
+  const entranceDoorL = new THREE.Mesh(doorLGeo, doorMat);
+  const entranceDoorR = new THREE.Mesh(doorRGeo, doorMat);
+  entranceDoorL.position.set(ROOM_HALF - 0.03, 1.05, -4.15);
+  entranceDoorR.position.set(ROOM_HALF - 0.03, 1.05, -4.15);
+  scene.add(entranceDoorL, entranceDoorR);
+
+  // ---------- Estante de utensilios (pared derecha) ----------
+  buildShelfUnitZ(ROOM_HALF, 1.5, 4.1, 2.0, 0.48, [0.6, 1.35], -1, shelfMat);
+  const utensilSign = new THREE.Mesh(new THREE.PlaneGeometry(1.0, 0.32),
+    new THREE.MeshBasicMaterial({ map: makeTextPanel('UTENSILIOS', '', 360, 120, { bg: '#20262b', border: '#7fd7c4' }), transparent: true }));
+  utensilSign.position.set(ROOM_HALF - 0.02, 2.3, 2.8);
+  utensilSign.rotation.y = -Math.PI / 2;
+  scene.add(utensilSign);
+
+  // ---------- Extintor de pared (equipamiento estándar) ----------
+  (function buildExtinguisher() {
+    const bracket = new THREE.Mesh(new THREE.BoxGeometry(0.02, 0.35, 0.14), darkSteelMat);
+    bracket.position.set(ROOM_HALF - 0.02, 1.1, -1.6);
+    scene.add(bracket);
+    const body = new THREE.Mesh(new THREE.CylinderGeometry(0.055, 0.06, 0.32, 12), new THREE.MeshStandardMaterial({ color: 0xd7261f, roughness: 0.4, metalness: 0.3 }));
+    body.position.set(ROOM_HALF - 0.09, 1.12, -1.6);
+    scene.add(body);
+  })();
+
+  // ---------- Caneca de basura ----------
+  (function buildTrashCan() {
+    const group = new THREE.Group();
+    const body = new THREE.Mesh(new THREE.CylinderGeometry(0.26, 0.22, 0.55, 20), darkSteelMat);
+    body.position.y = 0.275;
+    group.add(body);
+    const rim = new THREE.Mesh(new THREE.TorusGeometry(0.27, 0.02, 8, 20), steelMat);
+    rim.rotation.x = Math.PI / 2;
+    rim.position.y = 0.55;
+    group.add(rim);
+    group.position.set(ZONE.trash.pos.x, 0, ZONE.trash.pos.z);
+    scene.add(group);
+  })();
+
+  // ---------- Rincón de café: mesa redonda + 2 sillas (decorativo) ----------
+  (function buildLounge() {
+    const legMat = darkSteelMat;
+    const table = new THREE.Mesh(new THREE.CylinderGeometry(0.35, 0.35, 0.03, 24), woodMat);
+    table.position.set(4.2, 0.72, 4.6);
+    scene.add(table);
+    const tableLeg = new THREE.Mesh(new THREE.CylinderGeometry(0.03, 0.03, 0.7, 10), legMat);
+    tableLeg.position.set(4.2, 0.37, 4.6);
+    scene.add(tableLeg);
+    [[-0.55, -0.1], [0.55, 0.15]].forEach(([dx, dz]) => {
+      const seat = new THREE.Mesh(new THREE.CylinderGeometry(0.16, 0.16, 0.04, 16), new THREE.MeshStandardMaterial({ color: 0xe0623f, roughness: 0.6 }));
+      seat.position.set(4.2 + dx, 0.46, 4.6 + dz);
+      scene.add(seat);
+      const leg = new THREE.Mesh(new THREE.CylinderGeometry(0.02, 0.02, 0.46, 8), legMat);
+      leg.position.set(4.2 + dx, 0.23, 4.6 + dz);
+      scene.add(leg);
+    });
+  })();
+
+  return {
+    scene, camera, renderer,
+    ZONE, colliders, resolvePlayerXZ,
+    ROOM_HALF, WALL_H, BACK_WALL_Z, COUNTER_DEPTH, COUNTER_TOP_Y, PLAYER_EYE, PLAYER_RADIUS, STOVE_CX,
+    stoveButtonMat, stoveButtonMesh, flames, blenderBladeGroup,
+    fridgeDoorMesh, fridgeBottles, entranceDoorL, entranceDoorR,
+    materials: { counterMat, steelMat, darkSteelMat, whiteMat, woodMat },
+    utils: { clamp, lerp, rand, makeTexture, makeTextPanel }
+  };
+})();
+
+window.World = World;
+</script>
+
+<!-- ── items.js: ingredientes, utensilios, sartenes/ollas, platos ── -->
+<script>
+/* ============================================================
+   ITEMS.JS — Ingredientes, utensilios, sartenes y platos
+   ============================================================
+   Responsabilidad de este archivo (y SOLO esto):
+     1) Construir las mallas 3D de cada objeto agarrable, con
+        suficiente detalle (multi-malla, texturas de canvas,
+        geometría con más segmentos) para que se lean como
+        objetos tridimensionales reales y no como formas
+        primitivas planas.
+     2) Llevar el ciclo de vida de esas instancias: arrays
+        globales (ingredients, pans, plates, utensils), spawn,
+        cambios de estado (crudo → picado/cocido).
+     3) Ofrecer un sistema de "glow" (resaltado) genérico que
+        cualquier objeto pueda usar — lo consume guide.js para
+        iluminar los ingredientes del pedido activo.
+
+   Depende de World (escena, ZONE) ya cargado. No sabe nada de
+   gestos de mano ni de pedidos: eso vive en game.js / guide.js.
+   ============================================================ */
+
+const Items = (() => {
+  const { scene } = World;
+  const { rand, makeTexture, makeTextPanel } = World.utils;
+
+  // ══════════════════════════════════════════════════════════
+  // TEXTURAS DE COMIDA (detalle visual: vetas, semillas, marcas)
+  // ══════════════════════════════════════════════════════════
+  const TX_MEAT_RAW = makeTexture((ctx, s) => {
+    ctx.fillStyle = '#c9584a'; ctx.fillRect(0, 0, s, s);
+    for (let i = 0; i < 80; i++) {
+      const v = (Math.random() * 26 | 0) - 13;
+      ctx.fillStyle = `rgba(${200 + v},${90 + v},${75 + v},.5)`;
+      ctx.fillRect(Math.random() * s, Math.random() * s, 2, 2);
+    }
+  }, 64, [1, 1]);
+  const TX_MEAT_GRILL_RAW = makeTexture((ctx, s) => {
+    ctx.fillStyle = '#c9584a'; ctx.fillRect(0, 0, s, s);
+    ctx.strokeStyle = 'rgba(120,40,30,.55)'; ctx.lineWidth = s * 0.07;
+    for (let i = -1; i < 3; i++) { ctx.beginPath(); ctx.moveTo(i * s / 2, s); ctx.lineTo(i * s / 2 + s / 2, 0); ctx.stroke(); }
+  }, 64, [1, 1]);
+  const TX_MEAT_GRILL_COOKED = makeTexture((ctx, s) => {
+    ctx.fillStyle = '#7a4326'; ctx.fillRect(0, 0, s, s);
+    for (let i = 0; i < 60; i++) {
+      const v = (Math.random() * 20 | 0) - 10;
+      ctx.fillStyle = `rgba(${110 + v},${65 + v},${38 + v},.5)`;
+      ctx.fillRect(Math.random() * s, Math.random() * s, 2, 2);
+    }
+    ctx.strokeStyle = 'rgba(35,15,8,.75)'; ctx.lineWidth = s * 0.08;
+    for (let i = -1; i < 3; i++) { ctx.beginPath(); ctx.moveTo(i * s / 2, s); ctx.lineTo(i * s / 2 + s / 2, 0); ctx.stroke(); }
+  }, 64, [1, 1]);
+  const TX_BUN_TOP = makeTexture((ctx, s) => {
+    ctx.fillStyle = '#d9a55b'; ctx.fillRect(0, 0, s, s);
+    for (let i = 0; i < 55; i++) {
+      const v = (Math.random() * 16 | 0) - 8;
+      ctx.fillStyle = `rgba(${210 + v},${165 + v},${95 + v},.55)`;
+      ctx.fillRect(Math.random() * s, Math.random() * s, 2, 2);
+    }
+    ctx.fillStyle = '#f4e4bd';
+    for (let i = 0; i < 14; i++) {
+      ctx.save();
+      ctx.translate(rand(6, s - 6), rand(6, s - 6));
+      ctx.rotate(rand(0, Math.PI));
+      ctx.fillRect(-2.4, -1, 4.8, 2);
+      ctx.restore();
+    }
+  }, 64, [1, 1]);
+  const TX_CHEESE = makeTexture((ctx, s) => {
+    ctx.fillStyle = '#f5c542'; ctx.fillRect(0, 0, s, s);
+    ctx.fillStyle = 'rgba(200,150,20,.35)';
+    for (let i = 0; i < 6; i++) {
+      const r = rand(2, 4.5);
+      ctx.beginPath(); ctx.ellipse(rand(6, s - 6), rand(6, s - 6), r, r * 0.8, 0, 0, Math.PI * 2); ctx.fill();
+    }
+  }, 48, [1, 1]);
+
+  // ══════════════════════════════════════════════════════════
+  // INGREDIENTES
+  // ══════════════════════════════════════════════════════════
+  const INGREDIENT_DEF = {
+    tomato: { label: 'Tomate', color: 0xd1372b, needsChop: true, needsCook: false },
+    lettuce: { label: 'Lechuga', color: 0x5fae3d, needsChop: true, needsCook: false },
+    cheese: { label: 'Queso', color: 0xf5c542, needsChop: false, needsCook: false },
+    bun: { label: 'Pan', color: 0xd9a55b, needsChop: false, needsCook: false },
+    meat: { label: 'Carne', color: 0xc98169, needsChop: false, needsCook: true }
+  };
+
+  function chunkPiece(mat, s) {
+    const geo = new THREE.IcosahedronGeometry(s * rand(0.85, 1.15), 0);
+    const m = new THREE.Mesh(geo, mat);
+    m.rotation.set(rand(0, Math.PI), rand(0, Math.PI), rand(0, Math.PI));
+    m.scale.set(rand(0.8, 1.2), rand(0.6, 1), rand(0.8, 1.2));
+    return m;
+  }
+
+  function buildIngredientMesh(kind, state) {
+    const def = INGREDIENT_DEF[kind];
+    const group = new THREE.Group();
+
+    if (kind === 'meat') {
+      const cooked = state === 'cooked';
+      const sideMat = new THREE.MeshStandardMaterial({ color: cooked ? 0x5c3018 : 0xa8442f, roughness: 0.75 });
+      const capMat = new THREE.MeshStandardMaterial({ map: cooked ? TX_MEAT_GRILL_COOKED : TX_MEAT_GRILL_RAW, roughness: 0.7 });
+      const patty = new THREE.Mesh(new THREE.CylinderGeometry(0.088, 0.092, 0.05, 24), [sideMat, capMat, capMat]);
+      group.add(patty);
+    } else if (kind === 'bun') {
+      const bottomMat = new THREE.MeshStandardMaterial({ color: 0xc9924e, roughness: 0.75 });
+      const topMat = new THREE.MeshStandardMaterial({ map: TX_BUN_TOP, roughness: 0.7 });
+      const top = new THREE.Mesh(new THREE.SphereGeometry(0.097, 20, 14, 0, Math.PI * 2, 0, Math.PI / 1.7), topMat);
+      top.position.y = 0.012;
+      const base = new THREE.Mesh(new THREE.CylinderGeometry(0.097, 0.09, 0.035, 20), bottomMat);
+      base.position.y = -0.02;
+      group.add(top, base);
+    } else if (kind === 'cheese') {
+      const mat = new THREE.MeshStandardMaterial({ map: TX_CHEESE, roughness: 0.4, metalness: 0.05 });
+      const edgeMat = new THREE.MeshStandardMaterial({ color: 0xe0ac2f, roughness: 0.5 });
+      const slice = new THREE.Mesh(new THREE.BoxGeometry(0.13, 0.03, 0.13), [edgeMat, edgeMat, mat, mat, edgeMat, edgeMat]);
+      group.add(slice);
+    } else { // tomato / lettuce
+      if (state === 'chopped') {
+        const mat = new THREE.MeshStandardMaterial({ color: def.color, roughness: 0.55 });
+        const seedMat = kind === 'tomato' ? new THREE.MeshStandardMaterial({ color: 0xffd27a, roughness: 0.4 }) : null;
+        for (let i = 0; i < 7; i++) {
+          const piece = chunkPiece(mat, 0.026);
+          piece.position.set(rand(-0.055, 0.055), 0.012, rand(-0.055, 0.055));
+          group.add(piece);
+        }
+        if (seedMat) {
+          for (let i = 0; i < 4; i++) {
+            const seed = new THREE.Mesh(new THREE.SphereGeometry(0.006, 6, 6), seedMat);
+            seed.position.set(rand(-0.05, 0.05), 0.02, rand(-0.05, 0.05));
+            group.add(seed);
+          }
+        }
+      } else if (kind === 'tomato') {
+        const mat = new THREE.MeshStandardMaterial({ color: def.color, roughness: 0.3, metalness: 0.05 });
+        const body = new THREE.Mesh(new THREE.SphereGeometry(0.09, 20, 16), mat);
+        body.scale.y = 0.92;
+        group.add(body);
+        const calyxMat = new THREE.MeshStandardMaterial({ color: 0x4c8a2f, roughness: 0.7 });
+        for (let i = 0; i < 5; i++) {
+          const leaf = new THREE.Mesh(new THREE.ConeGeometry(0.014, 0.03, 6), calyxMat);
+          const a = (i / 5) * Math.PI * 2;
+          leaf.position.set(Math.cos(a) * 0.02, 0.078, Math.sin(a) * 0.02);
+          leaf.rotation.x = Math.PI;
+          leaf.rotation.z = Math.cos(a) * 0.5;
+          group.add(leaf);
+        }
+      } else { // lettuce entera: capas de hojas para lectura clara de "lechuga"
+        const shades = [0x4f9c34, 0x5fae3d, 0x72c04d, 0x5fae3d];
+        for (let layer = 0; layer < 4; layer++) {
+          const mat = new THREE.MeshStandardMaterial({ color: shades[layer], roughness: 0.65 });
+          const leafCount = 5;
+          const ringR = 0.075 - layer * 0.014;
+          const y = 0.01 + layer * 0.018;
+          for (let i = 0; i < leafCount; i++) {
+            const a = (i / leafCount) * Math.PI * 2 + layer * 0.4;
+            const leaf = new THREE.Mesh(new THREE.SphereGeometry(0.045, 8, 6, 0, Math.PI * 2, 0, Math.PI / 2), mat);
+            leaf.scale.set(1, 0.5, 1.3);
+            leaf.position.set(Math.cos(a) * ringR, y, Math.sin(a) * ringR);
+            leaf.rotation.y = -a;
+            leaf.rotation.z = 0.35;
+            group.add(leaf);
+          }
+        }
+      }
+    }
+    group.userData.kind = kind;
+    return group;
+  }
+
+  const ingredients = [];
+  const plates = [];
+
+  function spawnIngredient(kind, worldPos) {
+    const mesh = buildIngredientMesh(kind, 'raw');
+    mesh.position.copy(worldPos);
+    scene.add(mesh);
+    const obj = {
+      kind: 'ingredient',
+      ingredientType: kind,
+      state: 'raw',
+      choppedHits: 0,
+      cookProgress: 0,
+      mesh,
+      heldBy: null,
+      onBoard: false,
+      inPan: false,
+      grabOffset: new THREE.Vector3(),
+      radius: 0.2,
+      glow: null
+    };
+    ingredients.push(obj);
+    return obj;
+  }
+
+  function setIngredientState(obj, newState) {
+    obj.state = newState;
+    const pos = obj.mesh.position.clone();
+    const parent = obj.mesh.parent;
+    const hadGlow = !!obj.glow;
+    if (hadGlow) removeGlow(obj);
+    parent.remove(obj.mesh);
+    obj.mesh = buildIngredientMesh(obj.ingredientType, newState);
+    obj.mesh.position.copy(pos);
+    parent.add(obj.mesh);
+    if (hadGlow) addGlow(obj, hadGlow);
+  }
+
+  function isIngredientReady(obj) {
+    const def = INGREDIENT_DEF[obj.ingredientType];
+    if (def.needsChop && obj.state !== 'chopped') return false;
+    if (def.needsCook && obj.state !== 'cooked') return false;
+    return true;
+  }
+
+  // ---------- Sartenes y ollas: se mueven libremente entre los 4 fogones ----------
+  function buildPanMesh() {
+    const group = new THREE.Group();
+    const mat = new THREE.MeshStandardMaterial({ color: 0x2b2b2e, roughness: 0.32, metalness: 0.65 });
+    const rimMat = new THREE.MeshStandardMaterial({ color: 0x9aa0a6, roughness: 0.25, metalness: 0.8 });
+    group.add(new THREE.Mesh(new THREE.CylinderGeometry(0.22, 0.2, 0.055, 32), mat));
+    const rim = new THREE.Mesh(new THREE.TorusGeometry(0.22, 0.008, 8, 32), rimMat);
+    rim.rotation.x = Math.PI / 2;
+    rim.position.y = 0.028;
+    group.add(rim);
+    const handle = new THREE.Mesh(new THREE.CylinderGeometry(0.016, 0.02, 0.32, 12), new THREE.MeshStandardMaterial({ color: 0x1c1c1c, roughness: 0.55 }));
+    handle.rotation.z = Math.PI / 2;
+    handle.position.set(0.33, 0, 0);
+    group.add(handle);
+    return group;
+  }
+  // Olla: cuerpo más alto y angosto que el sartén, con dos asas laterales
+  // en forma de aro (en vez de un mango largo) para que se lea claramente
+  // como una pieza distinta al sartén.
+  function buildPotMesh() {
+    const group = new THREE.Group();
+    const mat = new THREE.MeshStandardMaterial({ color: 0x33363b, roughness: 0.3, metalness: 0.7 });
+    const rimMat = new THREE.MeshStandardMaterial({ color: 0xb7bcc2, roughness: 0.22, metalness: 0.8 });
+    const body = new THREE.Mesh(new THREE.CylinderGeometry(0.165, 0.155, 0.17, 28), mat);
+    body.position.y = 0.03;
+    group.add(body);
+    const rim = new THREE.Mesh(new THREE.TorusGeometry(0.165, 0.009, 8, 28), rimMat);
+    rim.rotation.x = Math.PI / 2;
+    rim.position.y = 0.115;
+    group.add(rim);
+    [-1, 1].forEach(side => {
+      const handle = new THREE.Mesh(new THREE.TorusGeometry(0.032, 0.007, 6, 12, Math.PI), rimMat);
+      handle.rotation.z = Math.PI / 2;
+      handle.rotation.y = side > 0 ? 0 : Math.PI;
+      handle.position.set(side * 0.18, 0.06, 0);
+      group.add(handle);
+    });
+    return group;
+  }
+  const pans = [2, 3].map(burnerIdx => {
+    const b = World.ZONE.burners[burnerIdx];
+    const mesh = buildPanMesh();
+    mesh.position.set(b.pos.x, b.pos.y + 0.03, b.pos.z);
+    scene.add(mesh);
+    return { kind: 'pan', mesh, heldBy: null, onStove: true, contents: [], grabOffset: new THREE.Vector3(), radius: 0.3, glow: null };
+  });
+  // Sartén de repuesto, lista para tomar del mostrador (más sartenes disponibles
+  // que fogones, así siempre hay una libre aunque las otras estén ocupadas).
+  (function spareSkillet() {
+    const mesh = buildPanMesh();
+    mesh.position.set(2.6, World.COUNTER_TOP_Y + 0.03, World.BACK_WALL_Z + World.COUNTER_DEPTH / 2);
+    scene.add(mesh);
+    pans.push({ kind: 'pan', mesh, heldBy: null, onStove: false, contents: [], grabOffset: new THREE.Vector3(), radius: 0.3, glow: null });
+  })();
+  const pots = [0, 1].map(burnerIdx => {
+    const b = World.ZONE.burners[burnerIdx];
+    const mesh = buildPotMesh();
+    mesh.position.set(b.pos.x, b.pos.y + 0.058, b.pos.z);
+    scene.add(mesh);
+    return { kind: 'pot', mesh, heldBy: null, onStove: true, contents: [], grabOffset: new THREE.Vector3(), radius: 0.3, glow: null };
+  });
+
+  // ---------- Platos ----------
+  function buildPlateMesh() {
+    const group = new THREE.Group();
+    const rim = new THREE.Mesh(new THREE.CylinderGeometry(0.2, 0.207, 0.018, 32), new THREE.MeshStandardMaterial({ color: 0xfbfaf6, roughness: 0.3 }));
+    group.add(rim);
+    const accent = new THREE.Mesh(new THREE.TorusGeometry(0.185, 0.003, 6, 32), new THREE.MeshStandardMaterial({ color: 0x2f8f4e, roughness: 0.4, metalness: 0.3 }));
+    accent.rotation.x = Math.PI / 2;
+    accent.position.y = 0.01;
+    group.add(accent);
+    const inner = new THREE.Mesh(new THREE.CylinderGeometry(0.16, 0.16, 0.006, 32), new THREE.MeshStandardMaterial({ color: 0xefeade, roughness: 0.35 }));
+    inner.position.y = 0.011;
+    group.add(inner);
+    return group;
+  }
+  function spawnPlate(worldPos) {
+    const mesh = buildPlateMesh();
+    mesh.position.copy(worldPos);
+    scene.add(mesh);
+    const obj = { kind: 'plate', mesh, heldBy: null, contents: [], grabOffset: new THREE.Vector3(), radius: 0.28, glow: null };
+    plates.push(obj);
+    return obj;
+  }
+  function despawnPlate(plate) {
+    removeGlow(plate);
+    scene.remove(plate.mesh);
+    const i = plates.indexOf(plate);
+    if (i !== -1) plates.splice(i, 1);
+  }
+  for (let i = 0; i < 4; i++) {
+    const deco = buildPlateMesh();
+    deco.position.set(World.ZONE.plateStack.pos.x, World.ZONE.plateStack.pos.y - 0.05 + i * 0.02, World.ZONE.plateStack.pos.z);
+    scene.add(deco);
+  }
+
+  // ---------- Utensilios (cuchillo, espátula, cucharón) ----------
+  function buildKnifeMesh() {
+    const group = new THREE.Group();
+    const blade = new THREE.Mesh(new THREE.BoxGeometry(0.22, 0.022, 0.05), new THREE.MeshStandardMaterial({ color: 0xdfe4e8, roughness: 0.2, metalness: 0.85 }));
+    blade.position.x = 0.12;
+    const bolster = new THREE.Mesh(new THREE.BoxGeometry(0.02, 0.03, 0.055), new THREE.MeshStandardMaterial({ color: 0x9a9a9a, roughness: 0.3, metalness: 0.7 }));
+    bolster.position.x = 0.005;
+    const handle = new THREE.Mesh(new THREE.BoxGeometry(0.12, 0.03, 0.032), new THREE.MeshStandardMaterial({ color: 0x2a1c10, roughness: 0.55 }));
+    handle.position.x = -0.065;
+    group.add(blade, bolster, handle);
+    return group;
+  }
+  function buildSpatulaMesh() {
+    const group = new THREE.Group();
+    const handle = new THREE.Mesh(new THREE.CylinderGeometry(0.013, 0.013, 0.24, 12), new THREE.MeshStandardMaterial({ color: 0x3a3a3a, roughness: 0.45 }));
+    handle.rotation.z = Math.PI / 2;
+    handle.position.x = -0.02;
+    const neck = new THREE.Mesh(new THREE.CylinderGeometry(0.012, 0.014, 0.04, 10), new THREE.MeshStandardMaterial({ color: 0xaaaaaa, roughness: 0.3, metalness: 0.5 }));
+    neck.rotation.z = Math.PI / 2;
+    neck.position.x = 0.1;
+    const head = new THREE.Mesh(new THREE.BoxGeometry(0.1, 0.007, 0.075), new THREE.MeshStandardMaterial({ color: 0xcfd3d6, roughness: 0.3, metalness: 0.55 }));
+    head.position.x = 0.15;
+    group.add(handle, neck, head);
+    return group;
+  }
+  function buildLadleMesh() {
+    const group = new THREE.Group();
+    const handle = new THREE.Mesh(new THREE.CylinderGeometry(0.011, 0.011, 0.26, 12), new THREE.MeshStandardMaterial({ color: 0x555555, roughness: 0.35, metalness: 0.65 }));
+    handle.rotation.z = Math.PI / 2;
+    handle.position.x = -0.03;
+    const bowl = new THREE.Mesh(new THREE.SphereGeometry(0.05, 16, 10, 0, Math.PI * 2, 0, Math.PI / 1.8), new THREE.MeshStandardMaterial({ color: 0x8c9094, roughness: 0.25, metalness: 0.65 }));
+    bowl.rotation.x = Math.PI;
+    bowl.position.x = 0.14;
+    group.add(handle, bowl);
+    return group;
+  }
+
+  const utensils = [];
+  function makeUtensil(toolType, mesh, pos, radius) {
+    mesh.rotation.y = Math.PI / 2;
+    mesh.position.copy(pos);
+    scene.add(mesh);
+    const obj = { kind: 'utensil', toolType, mesh, heldBy: null, grabOffset: new THREE.Vector3(), radius, glow: null };
+    utensils.push(obj);
+    return obj;
+  }
+  const knife = makeUtensil('knife', buildKnifeMesh(), World.ZONE.utensilSlots.knife, 0.22);
+  const spatula = makeUtensil('spatula', buildSpatulaMesh(), World.ZONE.utensilSlots.spatula, 0.22);
+  const ladle = makeUtensil('ladle', buildLadleMesh(), World.ZONE.utensilSlots.ladle, 0.22);
+
+  // ---------- Decoración de la despensa y el estante de utensilios ----------
+  // `pantryMarkers` expone la malla estática de cada canasta para que
+  // guide.js pueda iluminarla cuando ese ingrediente haga falta.
+  const pantryMarkers = {};
+  World.ZONE.pantrySlots.forEach(slot => {
+    const marker = buildIngredientMesh(slot.kind, 'raw');
+    marker.scale.setScalar(1.15);
+    marker.position.copy(slot.pos);
+    scene.add(marker);
+    pantryMarkers[slot.kind] = { mesh: marker, glow: null };
+    const basket = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.13, 0.11, 0.08, 20, 1, true),
+      new THREE.MeshStandardMaterial({ color: 0xd7dbe0, roughness: 0.5, metalness: 0.3, side: THREE.DoubleSide })
+    );
+    basket.position.set(slot.pos.x, slot.pos.y - 0.055, slot.pos.z);
+    scene.add(basket);
+    const label = new THREE.Mesh(
+      new THREE.PlaneGeometry(0.24, 0.09),
+      new THREE.MeshBasicMaterial({ map: makeTextPanel(INGREDIENT_DEF[slot.kind].label, '', 300, 110, { bg: '#20262b', border: '#7fd7c4' }), transparent: true })
+    );
+    label.position.set(slot.pos.x + 0.06, slot.pos.y - 0.14, slot.pos.z);
+    label.rotation.y = Math.PI / 2;
+    scene.add(label);
+  });
+  [
+    { name: 'CUCHILLO', pos: World.ZONE.utensilSlots.knife },
+    { name: 'ESPÁTULA', pos: World.ZONE.utensilSlots.spatula },
+    { name: 'CUCHARÓN', pos: World.ZONE.utensilSlots.ladle }
+  ].forEach(u => {
+    const label = new THREE.Mesh(
+      new THREE.PlaneGeometry(0.24, 0.09),
+      new THREE.MeshBasicMaterial({ map: makeTextPanel(u.name, '', 300, 110, { bg: '#20262b', border: '#7fd7c4' }), transparent: true })
+    );
+    label.position.set(u.pos.x - 0.06, u.pos.y - 0.18, u.pos.z);
+    label.rotation.y = -Math.PI / 2;
+    scene.add(label);
+  });
+
+  // ══════════════════════════════════════════════════════════
+  // GLOW GENÉRICO — resalta cualquier objeto (usado por guide.js
+  // para señalar los ingredientes/utensilios del pedido activo)
+  // ══════════════════════════════════════════════════════════
+  const glowing = [];
+  function addGlow(obj, color = 0xffd54a) {
+    if (obj.glow) return obj.glow;
+    obj.mesh.updateWorldMatrix(true, false);
+    const box = new THREE.Box3().setFromObject(obj.mesh);
+    const sphere = box.getBoundingSphere(new THREE.Sphere());
+    const r = Math.max(sphere.radius * 1.35, 0.08);
+    const mat = new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.32, side: THREE.BackSide, depthWrite: false });
+    const shell = new THREE.Mesh(new THREE.IcosahedronGeometry(r, 2), mat);
+    // sphere.center está en espacio de mundo: lo convertimos al espacio
+    // local de obj.mesh para que el glow quede bien ubicado aunque el
+    // objeto esté anidado (p. ej. un ingrediente ya dentro de un sartén).
+    shell.position.copy(obj.mesh.worldToLocal(sphere.center.clone()));
+    obj.mesh.add(shell);
+    obj.glow = { shell, mat, baseR: r, phase: Math.random() * Math.PI * 2, color };
+    glowing.push(obj);
+    return color;
+  }
+  function removeGlow(obj) {
+    if (!obj.glow) return;
+    obj.mesh.remove(obj.glow.shell);
+    const i = glowing.indexOf(obj);
+    if (i !== -1) glowing.splice(i, 1);
+    obj.glow = null;
+  }
+  function updateGlows(t) {
+    for (const obj of glowing) {
+      const g = obj.glow;
+      if (!g) continue;
+      const pulse = 1 + Math.sin(t * 3.4 + g.phase) * 0.12;
+      g.shell.scale.setScalar(pulse);
+      g.mat.opacity = 0.24 + Math.sin(t * 3.4 + g.phase) * 0.12;
+    }
+  }
+
+  return {
+    INGREDIENT_DEF,
+    ingredients, plates, pans, pots, utensils,
+    get vessels() { return [...pans, ...pots]; }, // sartenes + ollas: cualquier recipiente que cocina
+    knife, spatula, ladle,
+    pantryMarkers,
+    buildIngredientMesh, spawnIngredient, setIngredientState, isIngredientReady,
+    buildPlateMesh, spawnPlate, despawnPlate,
+    addGlow, removeGlow, updateGlows
+  };
+})();
+
+window.Items = Items;
+</script>
+
+<!-- ── game.js: agarrar/soltar con la pinza, bucle principal ── -->
+<script>
+/* ============================================================
+   GAME.JS — Restaurante VR: manos, interacción y bucle principal
+   ============================================================
+   Responsabilidad de este archivo:
+     - Avatar 3D de las manos rastreadas.
+     - Movimiento del jugador en primera persona (teclado).
+     - Mecánicas de interacción: agarrar/soltar con la pinza,
+       abrir puertas, picar, remover, cocinar, descartar, servir,
+       y el gesto de GIRAR LA MANO para encender/apagar la estufa.
+     - El bucle principal, que además llama a `Guide.update` e
+       `Items.updateGlows` para que el sistema de guía y los
+       resaltados de objetos se actualicen cada cuadro.
+
+   Este archivo consume `World` (escena/zonas), `Items`
+   (ingredientes/utensilios/platos/sartenes) y `HandTracking`
+   (gestos). Expone `window.Game` para que guide.js pueda leer el
+   estado de la estufa y usar el mismo sistema de toasts.
+   ============================================================ */
+
+(() => {
+
+const { scene, camera, renderer, ZONE, resolvePlayerXZ,
+        COUNTER_TOP_Y, PLAYER_EYE } = World;
+const { clamp, lerp } = World.utils;
+
+// Estado de juego compartido con guide.js a través de `window.Game`.
+const GameState = { stoveOn: false, activeGrab: { left: null, right: null }, fridgeOpen: false, entranceOpen: false, blenderOn: false, showToast: null };
+window.Game = GameState;
+
+// ══════════════════════════════════════════════════════════
+// MANOS 3D (avatar de las manos rastreadas)
+// ══════════════════════════════════════════════════════════
+const FINGER_SEGMENTS = [
+  [1, 2], [2, 3], [3, 4],
+  [5, 6], [6, 7], [7, 8],
+  [9, 10], [10, 11], [11, 12],
+  [13, 14], [14, 15], [15, 16],
+  [17, 18], [18, 19], [19, 20]
+];
+const FINGER_NAMES = ['thumb', 'index', 'middle', 'ring', 'pinky'];
+const FINGER_RADII = {
+  thumb: [0.021, 0.018, 0.015, 0.012],
+  index: [0.018, 0.016, 0.013, 0.010],
+  middle: [0.019, 0.017, 0.014, 0.011],
+  ring: [0.017, 0.015, 0.012, 0.010],
+  pinky: [0.015, 0.013, 0.011, 0.009]
+};
+const HAND_ACCENT = { left: 0x4fc3f7, right: 0xffb74d };
+const SKIN_COLOR = 0xe3a97a;
+const _UP = new THREE.Vector3(0, 1, 0);
+
+function buildHandVisual(handKey) {
+  const root = new THREE.Group();
+  const skinMat = new THREE.MeshStandardMaterial({ color: SKIN_COLOR, roughness: 0.55, emissive: 0x552200, emissiveIntensity: 0 });
+
+  const palm = new THREE.Mesh(new THREE.SphereGeometry(1, 18, 14), skinMat);
+  root.add(palm);
+
+  const wrist = new THREE.Mesh(new THREE.TorusGeometry(0.035, 0.01, 8, 16),
+    new THREE.MeshStandardMaterial({ color: HAND_ACCENT[handKey], roughness: 0.4, metalness: 0.3 }));
+  root.add(wrist);
+
+  const segs = FINGER_SEGMENTS.map(([a, b], i) => {
+    const finger = FINGER_NAMES[Math.floor(i / 3)];
+    const k = i % 3;
+    const radii = FINGER_RADII[finger];
+    const geo = new THREE.CylinderGeometry(radii[k + 1], radii[k], 1, 8);
+    const mesh = new THREE.Mesh(geo, skinMat);
+    root.add(mesh);
+    return { mesh, a, b };
+  });
+
+  const tips = FINGER_NAMES.map(finger => {
+    const mesh = new THREE.Mesh(new THREE.SphereGeometry(FINGER_RADII[finger][3], 8, 8), skinMat);
+    root.add(mesh);
+    return mesh;
+  });
+
+  root.visible = false;
+  scene.add(root);
+  return { root, palm, wrist, skinMat, segs, tips };
+}
+const handVisuals = { left: buildHandVisual('left'), right: buildHandVisual('right') };
+
+// ---------- Mapeo de coordenadas de la mano (0..1 MediaPipe) a espacio 3D ----------
+const HAND_SPACE = { width: 1.7, height: 1.3, vOffset: -0.12, depthBase: 0.55, depthScale: 1.6 };
+const _localOffset = new THREE.Vector3();
+function handWorldPosition(nx, ny, nz, out) {
+  const depth = clamp(HAND_SPACE.depthBase - nz * HAND_SPACE.depthScale, 0.28, 1.7);
+  _localOffset.set(
+    (nx - 0.5) * HAND_SPACE.width,
+    (0.5 - ny) * HAND_SPACE.height + HAND_SPACE.vOffset,
+    -depth
+  );
+  out.copy(_localOffset).applyMatrix4(camera.matrixWorld);
+  return out;
+}
+
+const _tmpA = new THREE.Vector3(), _tmpB = new THREE.Vector3();
+const _pR = new THREE.Vector3(), _pF = new THREE.Vector3(), _pU = new THREE.Vector3();
+const _wristW = new THREE.Vector3(), _idxBaseW = new THREE.Vector3(), _pinkyBaseW = new THREE.Vector3(), _midBaseW = new THREE.Vector3();
+const _basisMat = new THREE.Matrix4();
+
+function updateHandVisuals() {
+  for (const handKey of ['left', 'right']) {
+    const h = HandTracking.hands[handKey];
+    const vis = handVisuals[handKey];
+    vis.root.visible = h.detected;
+    if (!h.detected || !h.landmarks) continue;
+
+    vis.skinMat.emissiveIntensity = h.isPinching ? 0.8 : 0;
+
+    const lm = h.landmarks;
+    handWorldPosition(lm[0].x, lm[0].y, lm[0].z, _wristW);
+    handWorldPosition(lm[5].x, lm[5].y, lm[5].z, _idxBaseW);
+    handWorldPosition(lm[17].x, lm[17].y, lm[17].z, _pinkyBaseW);
+    handWorldPosition(lm[9].x, lm[9].y, lm[9].z, _midBaseW);
+
+    _pR.copy(_idxBaseW).sub(_pinkyBaseW).normalize();
+    _pF.copy(_midBaseW).sub(_wristW).normalize();
+    _pU.crossVectors(_pR, _pF).normalize();
+    _pF.crossVectors(_pU, _pR).normalize();
+    _basisMat.makeBasis(_pR, _pU, _pF);
+    vis.palm.quaternion.setFromRotationMatrix(_basisMat);
+    vis.wrist.quaternion.copy(vis.palm.quaternion);
+
+    handWorldPosition(h.palm.x, h.palm.y, h.palm.z, vis.palm.position);
+    const width = _idxBaseW.distanceTo(_pinkyBaseW) * 1.2 + 0.01;
+    const length = _wristW.distanceTo(_midBaseW) * 1.05 + 0.01;
+    vis.palm.scale.set(width * 0.5, width * 0.28, length * 0.55);
+    vis.wrist.position.copy(_wristW);
+
+    for (const seg of vis.segs) {
+      const a = lm[seg.a], b = lm[seg.b];
+      const pa = handWorldPosition(a.x, a.y, a.z, _tmpA).clone();
+      const pb = handWorldPosition(b.x, b.y, b.z, _tmpB).clone();
+      const mid = pa.clone().add(pb).multiplyScalar(0.5);
+      const dir = pb.clone().sub(pa);
+      const len = dir.length() || 0.001;
+      dir.normalize();
+      seg.mesh.position.copy(mid);
+      seg.mesh.scale.set(1, len, 1);
+      seg.mesh.quaternion.setFromUnitVectors(_UP, dir);
+    }
+
+    for (let f = 0; f < 5; f++) {
+      const tipIdx = FINGER_SEGMENTS[f * 3 + 2][1];
+      const p = lm[tipIdx];
+      handWorldPosition(p.x, p.y, p.z, vis.tips[f].position);
+    }
+  }
+}
+
+// ══════════════════════════════════════════════════════════
+// INTERACCIÓN: agarrar, soltar, picar, remover, cocinar, servir
+// ══════════════════════════════════════════════════════════
+const activeGrab = GameState.activeGrab;
+
+function allGrabbables() { return [...Items.ingredients, ...Items.vessels, ...Items.plates, ...Items.utensils]; }
+
+function nearestGrabbable(worldPos) {
+  let best = null, bestD = Infinity;
+  for (const obj of allGrabbables()) {
+    if (obj.heldBy) continue;
+    if (obj.onBoard) {
+      const def = obj.ingredientType && Items.INGREDIENT_DEF[obj.ingredientType];
+      if (def && def.needsChop && obj.state === 'raw') continue;
+    }
+    const d = obj.mesh.position.distanceTo(worldPos);
+    if (d < obj.radius && d < bestD) { bestD = d; best = obj; }
+  }
+  return best;
+}
+
+function detachFromVessel(obj) {
+  for (const p of Items.vessels) {
+    if (obj.mesh.parent === p.mesh) {
+      const worldPos = new THREE.Vector3();
+      obj.mesh.getWorldPosition(worldPos);
+      p.mesh.remove(obj.mesh);
+      scene.add(obj.mesh);
+      obj.mesh.position.copy(worldPos);
+      obj.mesh.rotation.set(0, 0, 0);
+      const i = p.contents.indexOf(obj);
+      if (i !== -1) p.contents.splice(i, 1);
+      break;
+    }
+  }
+  obj.inPan = false;
+}
+
+function grabObject(handKey, obj, worldPos) {
+  detachFromVessel(obj);
+  obj.heldBy = handKey;
+  obj.onBoard = false;
+  if (obj.onStove !== undefined) obj.onStove = false;
+  obj.grabOffset.copy(obj.mesh.position).sub(worldPos);
+  activeGrab[handKey] = obj;
+}
+
+// ---------- Estufa: gesto de GIRAR la mano sobre la perilla ----------
+// A propósito NO se enciende con solo tocar/pellizcar la perilla (eso
+// causaba activaciones accidentales). Hay que MANTENER la mano sobre
+// la perilla y girarla como una perilla real: a la derecha enciende,
+// a la izquierda apaga. Se exige un giro acumulado mínimo (con
+// decaimiento si la mano tiembla en vez de girar) más un cooldown
+// entre cambios, así que un roce accidental no dispara nada.
+const STOVE_TURN_THRESHOLD = 0.68; // rad ≈ 39° de giro intencional
+const STOVE_TOGGLE_COOLDOWN = 700; // ms
+// Con la cámara TRASERA (imagen sin espejo, ver tracking.js) el sentido
+// del giro medido en el plano de la imagen queda invertido respecto a
+// como estaba calibrado para una cámara frontal; -1 lo corrige para que
+// "girar a la derecha" siga encendiendo la estufa.
+const STOVE_TURN_SIGN = -1;
+const knobEngage = { left: { active: false, accum: 0, lastAngle: 0 }, right: { active: false, accum: 0, lastAngle: 0 } };
+let lastStoveToggleAt = 0;
+const _tmpKnob = new THREE.Vector3();
+
+function setStove(on) {
+  if (GameState.stoveOn === on) return;
+  GameState.stoveOn = on;
+  World.stoveButtonMat.color.set(on ? 0x2ecc71 : 0xcc2222);
+  World.stoveButtonMat.emissive.set(on ? 0x2ecc71 : 0x000000);
+  World.stoveButtonMat.emissiveIntensity = on ? 0.8 : 0;
+  const el = document.getElementById('stove-state');
+  el.textContent = on ? 'Encendida' : 'Apagada';
+  el.classList.toggle('on', on);
+  showToast(on ? '🔥 Estufa encendida (4 fogones)' : '🔥 Estufa apagada');
+}
+
+function updateStoveKnob(dt) {
+  for (const handKey of ['left', 'right']) {
+    const h = HandTracking.hands[handKey];
+    const eng = knobEngage[handKey];
+    if (!h.detected || !h.rollValid) { eng.active = false; eng.accum = 0; continue; }
+
+    const worldPos = handWorldPosition(h.palm.x, h.palm.y, h.palm.z, _tmpKnob);
+    const inZone = worldPos.distanceTo(ZONE.stoveButton.pos) < ZONE.stoveButton.r;
+    if (!inZone) { eng.active = false; eng.accum = 0; continue; }
+
+    if (!eng.active) {
+      eng.active = true;
+      eng.accum = 0;
+      eng.lastAngle = h.rollAngle;
+      continue;
+    }
+
+    const delta = HandTracking.angleDiff(h.rollAngle, eng.lastAngle);
+    eng.lastAngle = h.rollAngle;
+    eng.accum = lerp(eng.accum, 0, dt * 0.5); // decaimiento suave anti-temblor
+    eng.accum += delta * STOVE_TURN_SIGN;
+    eng.accum = clamp(eng.accum, -STOVE_TURN_THRESHOLD, STOVE_TURN_THRESHOLD);
+
+    const now = performance.now();
+    if (now - lastStoveToggleAt < STOVE_TOGGLE_COOLDOWN) continue;
+
+    if (eng.accum >= STOVE_TURN_THRESHOLD && !GameState.stoveOn) {
+      setStove(true); eng.accum = 0; lastStoveToggleAt = now;
+    } else if (eng.accum <= -STOVE_TURN_THRESHOLD && GameState.stoveOn) {
+      setStove(false); eng.accum = 0; lastStoveToggleAt = now;
+    }
+  }
+}
+
+function toggleFridge() {
+  GameState.fridgeOpen = !GameState.fridgeOpen;
+  showToast(GameState.fridgeOpen ? '🚪 Nevera abierta' : '🚪 Nevera cerrada');
+}
+function toggleEntranceDoor() {
+  GameState.entranceOpen = !GameState.entranceOpen;
+  showToast(GameState.entranceOpen ? '🚪 Puerta abierta' : '🚪 Puerta cerrada');
+}
+function toggleBlender() {
+  GameState.blenderOn = !GameState.blenderOn;
+  showToast(GameState.blenderOn ? '🥤 Licuadora encendida' : '🥤 Licuadora apagada');
+}
+
+function handleGrabStart(handKey, worldPos) {
+  // La perilla de la estufa YA NO se activa por pinza: se gira (ver updateStoveKnob).
+  if (worldPos.distanceTo(ZONE.fridgeHandle.pos) < ZONE.fridgeHandle.r) { toggleFridge(); return; }
+  if (worldPos.distanceTo(ZONE.entranceHandle.pos) < ZONE.entranceHandle.r) { toggleEntranceDoor(); return; }
+  if (worldPos.distanceTo(ZONE.blender.pos) < ZONE.blender.r) { toggleBlender(); return; }
+
+  for (const slot of ZONE.pantrySlots) {
+    if (worldPos.distanceTo(slot.pos) < 0.24) {
+      const obj = Items.spawnIngredient(slot.kind, slot.pos.clone());
+      grabObject(handKey, obj, worldPos);
+      return;
+    }
+  }
+  if (worldPos.distanceTo(ZONE.plateStack.pos) < ZONE.plateStack.r) {
+    const obj = Items.spawnPlate(ZONE.plateStack.pos.clone());
+    grabObject(handKey, obj, worldPos);
+    return;
+  }
+
+  const obj = nearestGrabbable(worldPos);
+  if (obj) grabObject(handKey, obj, worldPos);
+}
+
+function surfaceYAt(x, z) {
+  if (z < ZONE.board.pos.z + 0.35 && x > -World.ROOM_HALF + 0.6 && x < World.ROOM_HALF - 0.6) return COUNTER_TOP_Y;
+  if (x > World.ZONE.pass.pos.x - 0.4 && z > -0.85 && z < 0.85) return 0.9;
+  return 0;
+}
+function settleOnSurface(obj) {
+  obj.mesh.position.y = surfaceYAt(obj.mesh.position.x, obj.mesh.position.z) + 0.05;
+}
+
+function nearestPlateWithin(worldPos, maxDist) {
+  let best = null, bestD = Infinity;
+  for (const p of Items.plates) {
+    const d = p.mesh.position.distanceTo(worldPos);
+    if (d < maxDist && d < bestD) { bestD = d; best = p; }
+  }
+  return best;
+}
+function findNearbyVessel(worldPos, maxDist) {
+  let best = null, bestD = Infinity;
+  for (const p of Items.vessels) {
+    if (!p.onStove) continue;
+    const d = p.mesh.position.distanceTo(worldPos);
+    if (d < maxDist && d < bestD) { bestD = d; best = p; }
+  }
+  return best;
+}
+
+function addIngredientToPlate(plate, obj) {
+  detachFromVessel(obj);
+  Items.removeGlow(obj);
+  plate.contents.push({ kind: obj.ingredientType, state: obj.state });
+  scene.remove(obj.mesh);
+  const i = Items.ingredients.indexOf(obj);
+  if (i !== -1) Items.ingredients.splice(i, 1);
+
+  const topping = Items.buildIngredientMesh(obj.ingredientType, obj.state);
+  topping.scale.setScalar(0.85);
+  topping.position.set(Math.random() * 0.1 - 0.05, 0.015 + plate.contents.length * 0.02, Math.random() * 0.1 - 0.05);
+  plate.mesh.add(topping);
+  showToast(`✅ ${Items.INGREDIENT_DEF[obj.ingredientType].label} agregado al plato`);
+}
+
+function releaseIngredient(obj, worldPos) {
+  if (worldPos.distanceTo(ZONE.trash.pos) < ZONE.trash.r) {
+    Items.removeGlow(obj);
+    scene.remove(obj.mesh);
+    const i = Items.ingredients.indexOf(obj);
+    if (i !== -1) Items.ingredients.splice(i, 1);
+    showToast('🗑 Ingrediente descartado');
+    return;
+  }
+  const plate = nearestPlateWithin(worldPos, 0.32);
+  if (plate) {
+    if (Items.isIngredientReady(obj)) { addIngredientToPlate(plate, obj); return; }
+    showToast(`⚠ Prepara primero el ${Items.INGREDIENT_DEF[obj.ingredientType].label.toLowerCase()}`);
+  }
+  if (worldPos.distanceTo(ZONE.board.pos) < ZONE.board.r) {
+    obj.mesh.position.set(worldPos.x, COUNTER_TOP_Y + 0.05, worldPos.z);
+    obj.onBoard = true;
+    return;
+  }
+  const targetVessel = findNearbyVessel(worldPos, 0.26);
+  if (targetVessel && obj.ingredientType === 'meat') {
+    obj.inPan = true;
+    targetVessel.mesh.add(obj.mesh);
+    obj.mesh.position.set(0, 0.05, 0);
+    obj.mesh.rotation.set(0, 0, 0);
+    if (!targetVessel.contents.includes(obj)) targetVessel.contents.push(obj);
+    return;
+  }
+  settleOnSurface(obj);
+}
+
+function releaseVessel(obj, worldPos) {
+  for (const b of ZONE.burners) {
+    if (worldPos.distanceTo(b.pos) < b.r) {
+      obj.mesh.position.set(b.pos.x, b.pos.y + (obj.kind === 'pot' ? 0.058 : 0.03), b.pos.z);
+      obj.onStove = true;
+      return;
+    }
+  }
+  obj.onStove = false;
+  settleOnSurface(obj);
+}
+
+function releaseUtensil(obj, worldPos) {
+  settleOnSurface(obj);
+}
+
+function releasePlate(obj, worldPos) {
+  if (worldPos.distanceTo(ZONE.trash.pos) < ZONE.trash.r) {
+    Items.despawnPlate(obj);
+    showToast('🗑 Plato descartado');
+    return;
+  }
+  if (worldPos.distanceTo(ZONE.pass.pos) < ZONE.pass.r) { Guide.tryServe(obj); return; }
+  if (worldPos.distanceTo(ZONE.assembly.pos) < ZONE.assembly.r) {
+    obj.mesh.position.set(worldPos.x, COUNTER_TOP_Y + 0.02, worldPos.z);
+    return;
+  }
+  settleOnSurface(obj);
+}
+
+function handleGrabEnd(handKey, worldPos) {
+  const obj = activeGrab[handKey];
+  activeGrab[handKey] = null;
+  if (!obj) return;
+  obj.heldBy = null;
+  if (obj.kind === 'plate') releasePlate(obj, worldPos);
+  else if (obj.kind === 'pan' || obj.kind === 'pot') releaseVessel(obj, worldPos);
+  else if (obj.kind === 'utensil') releaseUtensil(obj, worldPos);
+  else releaseIngredient(obj, worldPos);
+}
+
+function updateHeldObjects() {
+  for (const handKey of ['left', 'right']) {
+    const obj = activeGrab[handKey];
+    if (!obj) continue;
+    const h = HandTracking.hands[handKey];
+    const worldPos = handWorldPosition(h.palm.x, h.palm.y, h.palm.z, _tmpVec2);
+    const target = worldPos.clone().add(obj.grabOffset);
+    obj.mesh.position.lerp(target, 0.5);
+  }
+}
+
+const _tmpVec = new THREE.Vector3(), _tmpVec2 = new THREE.Vector3();
+function updateHandGesturesAndInteractions() {
+  for (const handKey of ['left', 'right']) {
+    const h = HandTracking.hands[handKey];
+    const worldPos = handWorldPosition(h.palm.x, h.palm.y, h.palm.z, _tmpVec).clone();
+    if (h.pinchStarted && !activeGrab[handKey]) handleGrabStart(handKey, worldPos);
+    if (h.pinchEnded && activeGrab[handKey]) handleGrabEnd(handKey, worldPos);
+  }
+  updateHeldObjects();
+}
+
+// ---------- Picar ingredientes: requiere sostener el cuchillo ----------
+const CHOP_HITS_REQUIRED = 4;
+const _chopSpikeLatch = { left: false, right: false };
+const _tmpChop = new THREE.Vector3();
+let lastNoKnifeHint = 0;
+
+function spawnChopFX(pos) {
+  const mat = new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.9 });
+  const spark = new THREE.Mesh(new THREE.SphereGeometry(0.02, 6, 6), mat);
+  spark.position.copy(pos).add(new THREE.Vector3(0, 0.05, 0));
+  scene.add(spark);
+  const start = performance.now();
+  (function fade() {
+    const t = (performance.now() - start) / 250;
+    if (t >= 1) { scene.remove(spark); return; }
+    spark.scale.setScalar(1 + t * 3);
+    mat.opacity = 0.9 * (1 - t);
+    requestAnimationFrame(fade);
+  })();
+}
+
+function updateChopping() {
+  for (const obj of Items.ingredients) {
+    if (!obj.onBoard) continue;
+    const def = Items.INGREDIENT_DEF[obj.ingredientType];
+    if (!def.needsChop || obj.state !== 'raw') continue;
+
+    for (const handKey of ['left', 'right']) {
+      const h = HandTracking.hands[handKey];
+      const worldPos = handWorldPosition(h.palm.x, h.palm.y, h.palm.z, _tmpChop);
+      if (worldPos.distanceTo(obj.mesh.position) > 0.26) continue;
+
+      const spikeEdge = h.chopSpike && !_chopSpikeLatch[handKey];
+      _chopSpikeLatch[handKey] = h.chopSpike;
+      if (!spikeEdge) continue;
+
+      if (activeGrab[handKey] !== Items.knife) {
+        const now = performance.now();
+        if (now - lastNoKnifeHint > 4000) {
+          showToast('🔪 Necesitas sostener el cuchillo para picar');
+          lastNoKnifeHint = now;
+        }
+        continue;
+      }
+
+      obj.choppedHits++;
+      spawnChopFX(obj.mesh.position);
+      if (obj.choppedHits >= CHOP_HITS_REQUIRED) {
+        Items.setIngredientState(obj, 'chopped');
+        showToast(`🔪 ${def.label} picado`);
+      }
+    }
+  }
+}
+
+// ---------- Remover con la espátula/cucharón: acelera la cocción ----------
+const _tmpStir = new THREE.Vector3();
+const _stirLatch = { left: false, right: false };
+function updateStirring() {
+  for (const handKey of ['left', 'right']) {
+    const held = activeGrab[handKey];
+    if (held !== Items.spatula && held !== Items.ladle) { _stirLatch[handKey] = false; continue; }
+    const h = HandTracking.hands[handKey];
+    const worldPos = handWorldPosition(h.palm.x, h.palm.y, h.palm.z, _tmpStir);
+    const nearVessel = findNearbyVessel(worldPos, 0.28);
+
+    const spikeEdge = h.chopSpike && !_stirLatch[handKey];
+    _stirLatch[handKey] = h.chopSpike;
+    if (!spikeEdge || !nearVessel || !GameState.stoveOn) continue;
+
+    for (const obj of nearVessel.contents) {
+      if (obj.state !== 'cooked') obj.cookProgress += 0.6;
+    }
+  }
+}
+
+// ---------- Cocinar en la estufa ----------
+const COOK_TIME = 3.5;
+function updateCooking(dt) {
+  if (!GameState.stoveOn) return;
+  for (const p of Items.vessels) {
+    if (!p.onStove) continue;
+    for (const obj of p.contents) {
+      if (obj.state === 'cooked') continue;
+      obj.cookProgress += dt;
+      if (obj.cookProgress >= COOK_TIME) {
+        Items.setIngredientState(obj, 'cooked');
+        showToast(`🍳 ${Items.INGREDIENT_DEF[obj.ingredientType].label} lista`);
+      }
+    }
+  }
+}
+
+// ---------- Animación de puertas, llamas y licuadora ----------
+let fridgeDoorAngle = 0, entranceAngle = 0, clockT = 0;
+function updateFridgeDoorAnim(dt) {
+  fridgeDoorAngle = lerp(fridgeDoorAngle, GameState.fridgeOpen ? 1.3 : 0, Math.min(1, dt * 4));
+  World.fridgeDoorMesh.rotation.y = fridgeDoorAngle;
+  World.fridgeBottles.forEach(b => b.visible = GameState.fridgeOpen);
+}
+function updateEntranceDoorAnim(dt) {
+  entranceAngle = lerp(entranceAngle, GameState.entranceOpen ? 1.1 : 0, Math.min(1, dt * 4));
+  World.entranceDoorL.rotation.y = -entranceAngle;
+  World.entranceDoorR.rotation.y = entranceAngle;
+}
+function updateFlameVisual() {
+  World.flames.forEach(f => {
+    f.visible = GameState.stoveOn;
+    if (GameState.stoveOn) {
+      const s = 1 + Math.sin(clockT * 14) * 0.12;
+      f.scale.set(s, 1 + Math.sin(clockT * 11) * 0.15, s);
+    }
+  });
+}
+function updateBlenderVisual(dt) {
+  if (GameState.blenderOn) World.blenderBladeGroup.rotation.y += dt * 28;
+}
+
+// ---------- Toasts ----------
+function showToast(text) {
+  const wrap = document.getElementById('toast-wrap');
+  const el = document.createElement('div');
+  el.className = 'toast';
+  el.textContent = text;
+  wrap.appendChild(el);
+  requestAnimationFrame(() => el.classList.add('show'));
+  setTimeout(() => { el.classList.remove('show'); setTimeout(() => el.remove(), 300); }, 2200);
+}
+GameState.showToast = showToast;
+
+// ---------- HUD de manos ----------
+const UTENSIL_LABEL = { knife: 'Cuchillo', spatula: 'Espátula', ladle: 'Cucharón' };
+function updateHudHands() {
+  const l = HandTracking.hands.left, r = HandTracking.hands.right;
+  const pl = document.getElementById('pinch-l'), pr = document.getElementById('pinch-r');
+  pl.style.width = (l.pinch * 100) + '%'; pl.classList.toggle('grabbing', l.isPinching);
+  pr.style.width = (r.pinch * 100) + '%'; pr.classList.toggle('grabbing', r.isPinching);
+
+  let status;
+  if (!l.detected && !r.detected) status = 'Buscando manos… acércate a la cámara';
+  else if (l.detected && r.detected) status = 'Ambas manos detectadas';
+  else status = l.detected ? 'Mano izquierda detectada' : 'Mano derecha detectada';
+  document.getElementById('status-text').textContent = status;
+
+  const nameOf = (o) => {
+    if (!o) return null;
+    if (o.kind === 'plate') return `Plato (${o.contents.length} ing.)`;
+    if (o.kind === 'pan') return 'Sartén';
+    if (o.kind === 'pot') return 'Olla';
+    if (o.kind === 'utensil') return UTENSIL_LABEL[o.toolType];
+    const extra = o.state !== 'raw' ? ` (${o.state === 'chopped' ? 'picado' : 'cocido'})` : '';
+    return Items.INGREDIENT_DEF[o.ingredientType].label + extra;
+  };
+  const l2 = nameOf(activeGrab.left), r2 = nameOf(activeGrab.right);
+  const info = document.getElementById('held-info');
+  info.innerHTML = (!l2 && !r2) ? 'Manos vacías' :
+    [l2 ? `Izq: <b>${l2}</b>` : '', r2 ? `Der: <b>${r2}</b>` : ''].filter(Boolean).join(' · ');
+}
+
+// ══════════════════════════════════════════════════════════
+// JUGADOR: movimiento en primera persona (teclado)
+// ══════════════════════════════════════════════════════════
+const K = {};
+window.addEventListener('keydown', e => { K[e.code] = true; });
+window.addEventListener('keyup', e => { K[e.code] = false; });
+
+const player = { pos: new THREE.Vector3(0, PLAYER_EYE, 3.5), yaw: 0, pitch: 0 };
+const MOVE_SPEED = 2.2, TURN_SPEED = 1.6, LOOK_SPEED = 1.2;
+// Agacharse: mantén C para bajar la cámara y poder alcanzar objetos que
+// se cayeron al piso (el alcance de las manos es relativo a la cámara,
+// así que al bajarla también baja toda la zona donde se puede agarrar).
+const CROUCH_EYE = PLAYER_EYE - 0.62;
+const CROUCH_SPEED_MULT = 0.55;
+let eyeHeight = PLAYER_EYE;
+
+function updatePlayerMovement(dt) {
+  if (K['ArrowLeft']) player.yaw += TURN_SPEED * dt;
+  if (K['ArrowRight']) player.yaw -= TURN_SPEED * dt;
+  if (K['ArrowUp']) player.pitch = clamp(player.pitch + LOOK_SPEED * dt, -1.2, 1.2);
+  if (K['ArrowDown']) player.pitch = clamp(player.pitch - LOOK_SPEED * dt, -1.2, 1.2);
+
+  const crouching = !!K['KeyC'];
+  eyeHeight = lerp(eyeHeight, crouching ? CROUCH_EYE : PLAYER_EYE, Math.min(1, dt * 6));
+  const moveSpeed = MOVE_SPEED * (crouching ? CROUCH_SPEED_MULT : 1);
+
+  const sinY = Math.sin(player.yaw), cosY = Math.cos(player.yaw);
+  const fwd = { x: -sinY, z: -cosY };
+  const right = { x: cosY, z: -sinY };
+
+  let mx = 0, mz = 0;
+  if (K['KeyW']) { mx += fwd.x; mz += fwd.z; }
+  if (K['KeyS']) { mx -= fwd.x; mz -= fwd.z; }
+  if (K['KeyD']) { mx += right.x; mz += right.z; }
+  if (K['KeyA']) { mx -= right.x; mz -= right.z; }
+
+  const len = Math.hypot(mx, mz);
+  if (len > 0.0001) {
+    mx /= len; mz /= len;
+    const resolved = resolvePlayerXZ(player.pos.x + mx * moveSpeed * dt, player.pos.z + mz * moveSpeed * dt);
+    player.pos.x = resolved.x;
+    player.pos.z = resolved.z;
+  }
+
+  player.pos.y = eyeHeight;
+  camera.position.copy(player.pos);
+  camera.rotation.set(player.pitch, player.yaw, 0, 'YXZ');
+  camera.updateMatrixWorld(true);
+}
+
+// ══════════════════════════════════════════════════════════
+// BUCLE PRINCIPAL
+// ══════════════════════════════════════════════════════════
+let lastT = performance.now();
+function loop() {
+  requestAnimationFrame(loop);
+  const now = performance.now();
+  const dt = Math.min((now - lastT) / 1000, 0.05);
+  lastT = now;
+  clockT += dt;
+
+  updatePlayerMovement(dt);
+  updateHandGesturesAndInteractions();
+  updateStoveKnob(dt);
+  updateHandVisuals();
+  updateChopping();
+  updateStirring();
+  updateCooking(dt);
+  updateFridgeDoorAnim(dt);
+  updateEntranceDoorAnim(dt);
+  updateFlameVisual();
+  updateBlenderVisual(dt);
+  updateHudHands();
+  Items.updateGlows(clockT);
+  Guide.update(dt, clockT);
+
+  renderer.render(scene, camera);
+}
+
+// ══════════════════════════════════════════════════════════
+// ARRANQUE: pantalla de inicio -> permiso de cámara -> juego
+// ══════════════════════════════════════════════════════════
+const startBtn = document.getElementById('start-btn');
+const startStatus = document.getElementById('start-status');
+
+startBtn.addEventListener('click', async () => {
+  startBtn.disabled = true;
+  startStatus.textContent = 'Solicitando acceso a la cámara…';
+  try {
+    await HandTracking.start();
+    document.getElementById('start-screen').classList.add('hidden');
+    document.getElementById('hud').classList.remove('hidden');
+    Guide.startFirstOrder();
+    lastT = performance.now();
+    requestAnimationFrame(loop);
+  } catch (err) {
+    startStatus.textContent = 'No se pudo acceder a la cámara: ' + (err && err.message ? err.message : err);
+    startBtn.disabled = false;
+  }
+});
+
+document.getElementById('restart-btn').addEventListener('click', () => location.reload());
+
+})();
+</script>
+
+<!-- ── guide.js: pedidos, pista paso a paso, puntaje ── -->
+<script>
+/* ============================================================
+   GUIDE.JS — Sistema de guía: pedidos, resaltado y tutorial
+   ============================================================
+   Responsabilidad de este archivo (y SOLO esto):
+     1) Recetas y ciclo de pedidos (temporizador amplio, puntaje).
+     2) Un motor de "pista" que, cuadro a cuadro, mira el estado
+        REAL del mundo (qué ingredientes existen, en qué estado,
+        si están en un plato, si la estufa está encendida...) y
+        deduce la siguiente acción concreta que el jugador debe
+        realizar para completar el pedido activo. Al ser derivado
+        del estado en vez de un guion fijo, sigue siendo correcto
+        sin importar en qué orden el jugador decida trabajar.
+     3) A partir de esa pista: (a) hace brillar (glow) los objetos
+        involucrados, (b) mueve un marcador luminoso al punto
+        exacto del mesón donde hay que actuar, y (c) actualiza el
+        panel de tutorial y el ticket de pedido (tachando lo que
+        ya está listo en el plato).
+
+   Lee `Game.stoveOn` / `Game.showToast` (expuestos por game.js);
+   todo lo demás lo deriva de Items/World. No conoce gestos de
+   mano: solo observa el resultado de que game.js ya los procesó
+   (heldBy, onBoard, inPan, contents...).
+   ============================================================ */
+
+const Guide = (() => {
+  const { scene } = World;
+
+  // ══════════════════════════════════════════════════════════
+  // RECETAS — sin límite de tiempo: el pedido espera lo que haga
+  // falta, sin presión de reloj.
+  // ══════════════════════════════════════════════════════════
+  const RECIPES = [
+    { name: 'Hamburguesa Especial', items: [
+        { kind: 'bun', state: 'raw' }, { kind: 'meat', state: 'cooked' },
+        { kind: 'cheese', state: 'raw' }, { kind: 'lettuce', state: 'chopped' }
+    ]},
+    { name: 'Ensalada Fresca', items: [
+        { kind: 'lettuce', state: 'chopped' }, { kind: 'tomato', state: 'chopped' }, { kind: 'cheese', state: 'raw' }
+    ]},
+    { name: 'Hamburguesa Simple', items: [
+        { kind: 'bun', state: 'raw' }, { kind: 'meat', state: 'cooked' }, { kind: 'tomato', state: 'chopped' }
+    ]}
+  ];
+
+  let currentOrder = null, score = 0;
+
+  // ---------- Ticket de pedido ----------
+  function renderOrderTicket() {
+    document.getElementById('order-name').textContent = currentOrder.name;
+    const ul = document.getElementById('order-items');
+    ul.innerHTML = '';
+    currentOrder.items.forEach(it => {
+      const li = document.createElement('li');
+      const extra = it.state === 'chopped' ? ' (picado)' : it.state === 'cooked' ? ' (cocido)' : '';
+      li.textContent = Items.INGREDIENT_DEF[it.kind].label + extra;
+      li.dataset.kind = it.kind;
+      li.dataset.state = it.state;
+      ul.appendChild(li);
+    });
+  }
+  function markTicketProgress(plate) {
+    const have = plate ? plate.contents.slice() : [];
+    document.querySelectorAll('#order-items li').forEach(li => {
+      const idx = have.findIndex(h => h.kind === li.dataset.kind && h.state === li.dataset.state);
+      if (idx !== -1) { have.splice(idx, 1); li.classList.add('done'); }
+      else li.classList.remove('done');
+    });
+  }
+
+  function nextOrder() {
+    let r;
+    do { r = RECIPES[Math.floor(Math.random() * RECIPES.length)]; }
+    while (RECIPES.length > 1 && currentOrder && r.name === currentOrder.name);
+    currentOrder = r;
+    renderOrderTicket();
+  }
+  function startFirstOrder() { nextOrder(); }
+
+  function tryServe(plate) {
+    const need = currentOrder.items.slice();
+    const have = plate.contents.slice();
+    const ok = need.length === have.length && need.every(n => {
+      const idx = have.findIndex(h => h.kind === n.kind && h.state === n.state);
+      if (idx === -1) return false;
+      have.splice(idx, 1);
+      return true;
+    });
+    if (ok) {
+      score += 100;
+      document.getElementById('score').textContent = score;
+      Game.showToast(`🎉 ¡${currentOrder.name} servido! +100`);
+      Items.despawnPlate(plate);
+      nextOrder();
+    } else {
+      Game.showToast('❌ Ese plato no coincide con el pedido');
+    }
+    return ok;
+  }
+
+  // ══════════════════════════════════════════════════════════
+  // MOTOR DE PISTA — deriva la siguiente acción del estado real
+  // ══════════════════════════════════════════════════════════
+  const pantryPos = {};
+  World.ZONE.pantrySlots.forEach(s => { pantryPos[s.kind] = s.pos; });
+  const stoveKnobWrapper = { mesh: World.stoveButtonMesh, glow: null };
+
+  function pickActivePlate() {
+    if (!Items.plates.length) return null;
+    let best = null, bestScore = -1;
+    for (const p of Items.plates) {
+      let s = 0;
+      const have = p.contents.slice();
+      for (const n of currentOrder.items) {
+        const idx = have.findIndex(h => h.kind === n.kind && h.state === n.state);
+        if (idx !== -1) { s++; have.splice(idx, 1); }
+      }
+      if (s >= bestScore) { bestScore = s; best = p; }
+    }
+    return best;
+  }
+
+  function computeMissing(plate) {
+    const have = plate ? plate.contents.slice() : [];
+    const missing = [];
+    for (const n of currentOrder.items) {
+      const idx = have.findIndex(h => h.kind === n.kind && h.state === n.state);
+      if (idx === -1) missing.push(n); else have.splice(idx, 1);
+    }
+    return missing;
+  }
+
+  function findBestInstance(kind) {
+    const candidates = Items.ingredients.filter(o => o.ingredientType === kind);
+    if (!candidates.length) return null;
+    return candidates.find(o => Items.isIngredientReady(o) && !o.heldBy)
+      || candidates.find(o => Items.isIngredientReady(o))
+      || candidates.find(o => o.inPan)
+      || candidates.find(o => o.onBoard)
+      || candidates[candidates.length - 1];
+  }
+
+  function anyStoveVessel() { return Items.vessels.find(p => p.onStove) || null; }
+
+  // Qué tan avanzado está un ingrediente pendiente (mayor = más cerca de
+  // terminar). Se usa para que la pista siempre hable del ingrediente en
+  // el que el jugador ya está trabajando, en vez de quedarse fija en el
+  // primer ítem de la receta mientras ignora el progreso real.
+  function progressRank(kind) {
+    const inst = findBestInstance(kind);
+    if (!inst) return 0;
+    if (Items.isIngredientReady(inst)) return 5;
+    if (inst.inPan) return 4;
+    if (inst.onBoard) return 3;
+    if (inst.heldBy) return 2;
+    return 1;
+  }
+
+  function computeHint(plate) {
+    const missing = computeMissing(plate);
+
+    if (!missing.length) {
+      return plate
+        ? { text: `Lleva el plato a la ventanilla de pase y suéltalo para servir "${currentOrder.name}".`, glow: [plate], marker: World.ZONE.pass.pos, color: 0x3ddc84 }
+        : { text: 'Toma un plato de la pila del mostrador para emplatar el pedido.', glow: [], marker: World.ZONE.plateStack.pos, color: 0xffd54a };
+    }
+
+    let need = missing[0];
+    for (const m of missing) if (progressRank(m.kind) > progressRank(need.kind)) need = m;
+    const def = Items.INGREDIENT_DEF[need.kind];
+    const label = def.label.toLowerCase();
+    const inst = findBestInstance(need.kind);
+
+    if (!inst) {
+      const marker = pantryPos[need.kind];
+      return { text: `Toma ${label} de la despensa (izquierda).`, glow: [Items.pantryMarkers[need.kind]], marker, color: 0xffd54a };
+    }
+
+    if (inst.heldBy) {
+      if (def.needsChop && inst.state === 'raw') return { text: `Lleva ${label} a la tabla de picar.`, glow: [inst], marker: World.ZONE.board.pos, color: 0xffd54a };
+      if (def.needsCook && inst.state !== 'cooked') {
+        const vessel = anyStoveVessel();
+        return { text: vessel ? `Suelta ${label} dentro del sartén o la olla.` : `Coloca un sartén o una olla sobre un fogón (lo soltaste fuera de la estufa).`,
+          glow: [inst], marker: vessel ? vessel.mesh.position : World.ZONE.burners[2].pos, color: 0xffd54a };
+      }
+      return { text: `Coloca ${label} en el plato.`, glow: [inst], marker: plate ? World.ZONE.assembly.pos : World.ZONE.plateStack.pos, color: 0xffd54a };
+    }
+
+    if (def.needsChop && inst.state === 'raw') {
+      if (!inst.onBoard) return { text: `Lleva ${label} a la tabla de picar.`, glow: [inst], marker: World.ZONE.board.pos, color: 0xffd54a };
+      const knifeGlow = Items.knife.heldBy ? [] : [Items.knife];
+      return { text: `Toma el cuchillo y agita la mano sobre ${label} para picarlo.`, glow: [inst, ...knifeGlow], marker: World.ZONE.board.pos, color: 0xff8a3d };
+    }
+
+    if (def.needsCook && inst.state !== 'cooked') {
+      const vessel = anyStoveVessel();
+      if (!vessel) return { text: 'Coloca un sartén o una olla sobre uno de los fogones de la estufa.', glow: [inst], marker: World.ZONE.burners[2].pos, color: 0xffd54a };
+      if (!inst.inPan) return { text: `Lleva ${label} al sartén o la olla sobre la estufa.`, glow: [inst], marker: vessel.mesh.position, color: 0xffd54a };
+      if (!Game.stoveOn) return { text: 'Enciende la estufa: gira la mano hacia la derecha sobre la perilla.', glow: [stoveKnobWrapper], marker: World.ZONE.stoveButton.pos, color: 0xff5c5c };
+      const spatulaGlow = Items.spatula.heldBy ? [] : [Items.spatula];
+      return { text: `Espera a que ${label} se cocine (agita la mano con el cucharón/espátula sobre el sartén u olla para acelerar).`, glow: [inst, ...spatulaGlow], marker: vessel.mesh.position, color: 0xff8a3d };
+    }
+
+    if (!plate) return { text: `Toma un plato del mostrador para emplatar ${label}.`, glow: [inst], marker: World.ZONE.plateStack.pos, color: 0xffd54a };
+    return { text: `Coloca ${label} en el plato.`, glow: [inst], marker: World.ZONE.assembly.pos, color: 0xffd54a };
+  }
+
+  // ══════════════════════════════════════════════════════════
+  // MARCADOR LUMINOSO EN EL MESÓN (waypoint reutilizable)
+  // ══════════════════════════════════════════════════════════
+  const markerRingMat = new THREE.MeshBasicMaterial({ color: 0xffd54a, transparent: true, opacity: 0.85, side: THREE.DoubleSide, depthWrite: false });
+  const markerRing = new THREE.Mesh(new THREE.RingGeometry(0.15, 0.19, 32), markerRingMat);
+  markerRing.rotation.x = -Math.PI / 2;
+  const markerBeamMat = new THREE.MeshBasicMaterial({ color: 0xffd54a, transparent: true, opacity: 0.22, side: THREE.DoubleSide, depthWrite: false });
+  const markerBeam = new THREE.Mesh(new THREE.CylinderGeometry(0.025, 0.09, 0.5, 16, 1, true), markerBeamMat);
+  markerBeam.position.y = 0.27;
+  const markerGroup = new THREE.Group();
+  markerGroup.add(markerRing, markerBeam);
+  markerGroup.visible = false;
+  scene.add(markerGroup);
+
+  let currentGlowSet = [];
+  let lastHintText = null;
+  function applyHint(hint) {
+    const newSet = hint.glow || [];
+    for (const obj of currentGlowSet) if (!newSet.includes(obj)) Items.removeGlow(obj);
+    for (const obj of newSet) if (!currentGlowSet.includes(obj)) Items.addGlow(obj, hint.color);
+    currentGlowSet = newSet;
+
+    markerGroup.visible = !!hint.marker;
+    if (hint.marker) {
+      markerGroup.position.set(hint.marker.x, hint.marker.y + 0.015, hint.marker.z);
+      markerRingMat.color.setHex(hint.color);
+      markerBeamMat.color.setHex(hint.color);
+    }
+    if (hint.text !== lastHintText) {
+      const el = document.getElementById('tutorial-text');
+      if (el) el.textContent = hint.text;
+      lastHintText = hint.text;
+    }
+  }
+
+  // ══════════════════════════════════════════════════════════
+  // ACTUALIZACIÓN POR CUADRO
+  // ══════════════════════════════════════════════════════════
+  function update(dt, t) {
+    if (!currentOrder) return;
+    const plate = pickActivePlate();
+    markTicketProgress(plate);
+    applyHint(computeHint(plate));
+
+    const pulse = 1 + Math.sin(t * 4) * 0.1;
+    markerRing.scale.setScalar(pulse);
+    markerBeam.position.y = 0.27 + Math.sin(t * 4) * 0.05;
+  }
+
+  return { startFirstOrder, nextOrder, tryServe, update, get score() { return score; }, get currentOrder() { return currentOrder; } };
+})();
+
+window.Guide = Guide;
+</script>
+
+<!-- ── cardboard.js: mirar con la cabeza (DeviceOrientation) + render estéreo ── -->
+<script>
+/* ============================================================
+   CARDBOARD.JS — Modo Cartón (gafas de plástico/cartón + celular)
+   ============================================================
+   Añade la opción de ver la cocina en estéreo con unas gafas de
+   cartón, igual que en MedVR Biomédico, SIN tocar ninguna otra
+   pieza del restaurante:
+
+     1) Render estéreo: parcha `World.renderer.render` para que,
+        en vez de dibujar una sola vez, dibuje la escena dos veces
+        (ojo izquierdo y ojo derecho), cada una en su mitad de la
+        pantalla, con un pequeño desplazamiento horizontal entre
+        ellas — la misma técnica (y los mismos números) que usa
+        MedVR. La mayoría de gafas de cartón NO tienen WebXR
+        nativo, así que esto se simula "a mano".
+
+     2) Mirar alrededor con la cabeza: mientras el Modo Cartón está
+        activo, se lee el giroscopio del teléfono (evento
+        `deviceorientation`) y su orientación se aplica a
+        `World.camera` justo antes de dibujar cada cuadro — es
+        decir, DESPUÉS de que game.js ya calculó la posición y
+        rotación por teclado para ese cuadro. Por eso nunca compite
+        con el movimiento WASD/flechas: simplemente se dibuja con
+        la orientación más reciente del giroscopio.
+
+        Como el rumbo absoluto del compás no es fiable ni
+        comparable entre dispositivos, al entrar en Modo Cartón se
+        "calibra": la primera lectura del giroscopio se ancla a la
+        dirección a la que ya estabas mirando, y desde ahí solo se
+        seguyen los giros relativos de la cabeza.
+
+     3) Divisor central + botones de salida duplicados (uno por
+        ojo), pantalla completa y bloqueo de orientación horizontal
+        — igual que en MedVR.
+
+   Este archivo SOLO lee `World.camera` / `World.renderer` y
+   `Game.showToast`. No modifica tracking.js, world.js, items.js,
+   game.js ni guide.js, y no depende de que ellos lo conozcan a él.
+   ============================================================ */
+
+(() => {
+  const { camera, renderer } = World;
+
+  let cardboardMode = false;
+  let stereoInstalled = false;
+
+  // ══════════════════════════════════════════════════════════
+  // GIROSCOPIO → ORIENTACIÓN DE LA CÁMARA
+  // ══════════════════════════════════════════════════════════
+  let gyroActive = false;
+  let lastOrientationEvent = null;
+  let calibrationQuaternion = null;
+
+  const _zee = new THREE.Vector3(0, 0, 1);
+  const _euler = new THREE.Euler();
+  const _q0 = new THREE.Quaternion();
+  const _q1 = new THREE.Quaternion(-Math.sqrt(0.5), 0, 0, Math.sqrt(0.5)); // -90° en X
+  const _deviceQ = new THREE.Quaternion();
+
+  // Algoritmo estándar (el mismo que usan three.js y la mayoría de
+  // visores "phone as VR") para convertir alpha/beta/gamma del
+  // sensor, más el ángulo de rotación de pantalla, en un quaternion.
+  function deviceQuaternion(e, out) {
+    const alpha = THREE.MathUtils.degToRad(e.alpha || 0);
+    const beta = THREE.MathUtils.degToRad(e.beta || 0);
+    const gamma = THREE.MathUtils.degToRad(e.gamma || 0);
+    const screenAngle = (screen.orientation && screen.orientation.angle) || window.orientation || 0;
+    const orient = THREE.MathUtils.degToRad(screenAngle);
+    _euler.set(beta, alpha, -gamma, 'YXZ');
+    out.setFromEuler(_euler);
+    out.multiply(_q1);
+    out.multiply(_q0.setFromAxisAngle(_zee, -orient));
+    return out;
+  }
+
+  function onDeviceOrientation(e) {
+    if (e.alpha == null && e.beta == null && e.gamma == null) return; // sensor sin datos
+    lastOrientationEvent = e;
+    gyroActive = true;
+  }
+  window.addEventListener('deviceorientation', onDeviceOrientation);
+
+  // Ancla la primera lectura del giroscopio a la orientación actual
+  // de la cámara, para no "saltar" de golpe a un rumbo arbitrario.
+  function calibrateGyro() {
+    if (!lastOrientationEvent) { calibrationQuaternion = null; return; }
+    deviceQuaternion(lastOrientationEvent, _deviceQ);
+    calibrationQuaternion = camera.quaternion.clone().multiply(_deviceQ.clone().invert());
+  }
+
+  function applyGyroToCamera() {
+    if (!gyroActive || !lastOrientationEvent) return;
+    if (!calibrationQuaternion) calibrateGyro();
+    deviceQuaternion(lastOrientationEvent, _deviceQ);
+    camera.quaternion.copy(calibrationQuaternion).multiply(_deviceQ);
+  }
+
+  // ══════════════════════════════════════════════════════════
+  // RENDER ESTÉREO (misma técnica que MedVR: parchar renderer.render)
+  // ══════════════════════════════════════════════════════════
+  function installStereoRenderer() {
+    if (stereoInstalled) return;
+    stereoInstalled = true;
+    const originalRender = renderer.render.bind(renderer);
+    const EYE_SEP = 0.032; // separación por ojo (mitad del promedio interpupilar humano)
+
+    renderer.render = function (scene, cam) {
+      if (!cardboardMode || !cam.isPerspectiveCamera) { originalRender(scene, cam); return; }
+      if (cam === camera) applyGyroToCamera();
+
+      const w = renderer.domElement.clientWidth, h = renderer.domElement.clientHeight;
+      const halfW = w / 2;
+      const prevAspect = cam.aspect;
+      cam.aspect = halfW / h;
+      cam.updateProjectionMatrix();
+      const localX = new THREE.Vector3(1, 0, 0).applyQuaternion(cam.quaternion);
+
+      renderer.setScissorTest(true);
+      // ojo izquierdo
+      cam.position.addScaledVector(localX, -EYE_SEP);
+      cam.updateMatrixWorld(true);
+      renderer.setViewport(0, 0, halfW, h); renderer.setScissor(0, 0, halfW, h);
+      originalRender(scene, cam);
+      // ojo derecho
+      cam.position.addScaledVector(localX, EYE_SEP * 2);
+      cam.updateMatrixWorld(true);
+      renderer.setViewport(halfW, 0, halfW, h); renderer.setScissor(halfW, 0, halfW, h);
+      originalRender(scene, cam);
+      // restablecer cámara y viewport a estado normal
+      cam.position.addScaledVector(localX, -EYE_SEP);
+      cam.updateMatrixWorld(true);
+      renderer.setScissorTest(false);
+      renderer.setViewport(0, 0, w, h);
+      cam.aspect = prevAspect;
+      cam.updateProjectionMatrix();
+    };
+  }
+
+  // ══════════════════════════════════════════════════════════
+  // PERMISO DE GIROSCOPIO (iOS 13+)
+  // Safari en iPhone exige pedir permiso explícito, y solo lo
+  // concede si se pide dentro de un toque directo del usuario —
+  // por eso se llama aquí mismo, dentro del botón, no al cargar.
+  // Solo funciona si la página se abre por https:// (no file://).
+  // ══════════════════════════════════════════════════════════
+  function requestMotionPermission() {
+    const DOE = window.DeviceOrientationEvent;
+    const needsPermission = DOE && typeof DOE.requestPermission === 'function';
+    if (!needsPermission) return Promise.resolve(true);
+    return DOE.requestPermission().then(state => state === 'granted').catch(() => false);
+  }
+
+  // ══════════════════════════════════════════════════════════
+  // ENTRAR / SALIR DEL MODO CARTÓN
+  // ══════════════════════════════════════════════════════════
+  function enterCardboard() {
+    requestMotionPermission().then(ok => {
+      installStereoRenderer();
+      calibrationQuaternion = null; // recalibrar el rumbo al entrar
+      cardboardMode = true;
+      document.body.classList.add('cardboard-on');
+      const el = document.documentElement;
+      if (el.requestFullscreen) el.requestFullscreen().catch(() => {});
+      if (screen.orientation && screen.orientation.lock) screen.orientation.lock('landscape').catch(() => {});
+      if (Game.showToast) Game.showToast(ok
+        ? '🥽 Modo Cartón activo — coloca el celular en las gafas.'
+        : '🥽 Modo Cartón activo (sin giroscopio: usa ←→ ↑↓ para mirar).');
+    });
+  }
+
+  function exitCardboard() {
+    cardboardMode = false;
+    document.body.classList.remove('cardboard-on');
+    if (document.exitFullscreen) document.exitFullscreen().catch(() => {});
+    if (screen.orientation && screen.orientation.unlock) screen.orientation.unlock();
+    if (Game.showToast) Game.showToast('🥽 Modo Cartón desactivado.');
+  }
+
+  document.getElementById('cardboard-btn').addEventListener('click', enterCardboard);
+  document.querySelectorAll('#cardboard-exit button').forEach(b => b.addEventListener('click', exitCardboard));
+})();
+</script>
+</body>
+</html>

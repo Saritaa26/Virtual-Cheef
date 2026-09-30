@@ -1,0 +1,300 @@
+/* ============================================================
+   RESTAURANTE VR — Hoja de estilos
+   Cubre: video de cámara de fondo, canvas 3D superpuesto,
+   pantalla de inicio, HUD de juego (ticket de pedido, puntaje,
+   estado de manos), y mensajes emergentes (toasts).
+
+   Paleta y tipografía adoptadas de MedVR Biomédico (panel oscuro
+   azul-tinta, acento teal quirúrgico, Space Grotesk + IBM Plex)
+   para que el restaurante se vea como si viviera dentro del mismo
+   sistema visual. Esto es SOLO piel: ningún id/clase que game.js,
+   world.js, items.js o guide.js consulten fue tocado ni renombrado.
+   ============================================================ */
+
+:root{
+  --bg:#0A1A22;
+  --ink:#EAF3F2;
+  --muted:#8FADB2;
+  --accent:#3FD8C4;
+  --accent2:#6EE7D8;
+  --accent-dim:#1F6E63;
+  --danger:#E1584B;
+  --panel-bg:linear-gradient(180deg,rgba(15,37,48,.94),rgba(10,26,34,.94));
+  --panel-border:#2A4B57;
+  --shadow:0 20px 50px rgba(0,0,0,.5);
+  --radius:14px;
+  --font-head:'Space Grotesk',sans-serif;
+  --font-body:'IBM Plex Sans',sans-serif;
+  --font-mono:'IBM Plex Mono',monospace;
+}
+
+*{box-sizing:border-box;margin:0;padding:0;}
+html,body{
+  width:100%;height:100%;
+  overflow:hidden;
+  background:var(--bg);
+  font-family:var(--font-body);
+  color:var(--ink);
+  -webkit-user-select:none;user-select:none;
+}
+
+/* ---------- Capa 0: video de la cámara (fondo AR) ---------- */
+#video{
+  position:fixed;
+  inset:0;
+  width:100%;height:100%;
+  object-fit:cover;
+  background:#000;
+  z-index:0;
+}
+
+/* ---------- Capa 1: canvas 3D (Three.js, fondo transparente) ---------- */
+#scene{
+  position:fixed;
+  inset:0;
+  width:100%;height:100%;
+  z-index:1;
+  pointer-events:none; /* el control es por gestos y teclado, no por mouse */
+  display:block;
+}
+
+.hidden{display:none !important;}
+
+/* ============================================================
+   PANTALLA DE INICIO
+   ============================================================ */
+#start-screen{
+  position:fixed;inset:0;z-index:100;
+  display:flex;align-items:center;justify-content:center;
+  background:radial-gradient(ellipse at center, #0F2530 0%, #071118 100%);
+  padding:20px;
+}
+#start-screen .panel{
+  max-width:480px;width:100%;
+  background:var(--panel-bg);
+  border:1px solid var(--panel-border);
+  border-radius:20px;
+  padding:28px 30px;
+  box-shadow:var(--shadow);
+  backdrop-filter:blur(14px);
+  text-align:center;
+}
+#start-screen h1{
+  font-family:var(--font-head);
+  font-size:28px;
+  font-weight:600;
+  letter-spacing:.2px;
+  color:var(--ink);
+  margin-bottom:6px;
+}
+#start-screen h1 .dot{
+  display:inline-block;width:10px;height:10px;border-radius:50%;
+  background:var(--accent);margin-right:10px;
+  box-shadow:0 0 12px var(--accent);
+}
+#start-screen .subtitle{
+  color:var(--muted);
+  font-size:14px;
+  margin-bottom:18px;
+}
+.instructions{
+  list-style:none;
+  text-align:left;
+  background:rgba(255,255,255,.04);
+  border:1px solid rgba(255,255,255,.08);
+  border-radius:12px;
+  padding:14px 16px;
+  margin-bottom:20px;
+  font-size:13px;
+  line-height:1.85;
+  color:var(--ink);
+  max-height:42vh;
+  overflow-y:auto;
+}
+.instructions li b{color:var(--accent2);}
+.instructions li{border-bottom:1px dashed rgba(255,255,255,.08);padding:3px 0;}
+.instructions li:last-child{border-bottom:none;}
+
+#start-btn{
+  font-family:var(--font-head);
+  font-size:18px;
+  letter-spacing:2px;
+  font-weight:700;
+  background:linear-gradient(180deg,var(--accent),var(--accent-dim));
+  border:none;
+  color:#04211C;
+  padding:14px 38px;
+  border-radius:30px;
+  cursor:pointer;
+  box-shadow:0 8px 22px rgba(63,216,196,.35);
+  transition:transform .12s, box-shadow .12s;
+}
+#start-btn:hover{transform:translateY(-2px);box-shadow:0 12px 28px rgba(63,216,196,.45);}
+#start-btn:active{transform:translateY(0);}
+#start-btn:disabled{opacity:.55;cursor:wait;}
+
+.hint{margin-top:14px;font-size:11.5px;color:var(--muted);line-height:1.5;}
+#start-status{margin-top:10px;font-size:12.5px;color:var(--danger);min-height:16px;}
+
+/* ============================================================
+   HUD EN JUEGO
+   ============================================================ */
+#hud{position:fixed;inset:0;z-index:10;pointer-events:none;}
+
+#top-left{
+  position:absolute;top:14px;left:14px;
+  display:flex;flex-direction:column;gap:8px;
+  align-items:flex-start;
+}
+#score-box{
+  background:var(--panel-bg);
+  border:1px solid var(--panel-border);
+  border-radius:10px;
+  padding:8px 16px;
+  font-family:var(--font-head);
+  font-size:20px;font-weight:700;
+  color:var(--accent);
+  box-shadow:var(--shadow);
+}
+#hand-status{
+  background:var(--panel-bg);
+  border:1px solid var(--panel-border);
+  border-radius:10px;
+  padding:8px 12px;
+  min-width:190px;
+  font-family:var(--font-mono);
+  font-size:11px;
+  letter-spacing:.2px;
+  color:var(--muted);
+}
+#status-text{display:block;margin-bottom:6px;color:var(--ink);}
+.hand-row{display:flex;align-items:center;gap:6px;margin-top:4px;}
+.hand-label{width:26px;font-weight:600;color:var(--ink);}
+.pinch-bar{flex:1;height:8px;border-radius:5px;background:rgba(255,255,255,.1);overflow:hidden;}
+.pinch-fill{height:100%;width:0%;background:linear-gradient(90deg,var(--accent-dim),var(--accent));transition:width .06s linear;}
+.pinch-fill.grabbing{background:linear-gradient(90deg,var(--accent),#c8fff5);}
+
+/* ---------- Ticket de pedido ---------- */
+#order-ticket{
+  position:absolute;top:14px;right:14px;
+  width:220px;
+  background:#fdf6e3;
+  color:#2a1c0a;
+  border-radius:4px;
+  border-top:3px solid var(--accent);
+  padding:14px 16px 12px;
+  box-shadow:var(--shadow);
+  font-family:'Courier New',monospace;
+  transform:rotate(1.5deg);
+}
+#order-ticket::before{
+  content:'';
+  position:absolute;top:-8px;left:0;right:0;height:8px;
+  background:repeating-linear-gradient(90deg,#fdf6e3 0 8px,transparent 8px 14px);
+}
+#order-ticket h3{font-family:var(--font-head);font-size:13px;letter-spacing:1px;border-bottom:1px dashed #b8a578;padding-bottom:6px;margin-bottom:8px;}
+#order-name{font-size:15px;font-weight:700;margin-bottom:6px;color:#7a3b12;}
+#order-items{list-style:none;font-size:12px;line-height:1.7;margin-bottom:10px;}
+#order-items li{display:flex;justify-content:space-between;gap:6px;}
+#order-items li.done{color:var(--accent-dim);text-decoration:line-through;}
+.timer-bar{height:7px;border-radius:4px;background:rgba(0,0,0,.12);overflow:hidden;}
+.timer-fill{height:100%;width:100%;background:linear-gradient(90deg,var(--accent),var(--danger));transition:width .2s linear;}
+
+/* ---------- Panel de tutorial paso a paso ---------- */
+#tutorial-panel{
+  position:absolute;top:58px;left:50%;transform:translateX(-50%);
+  display:flex;align-items:center;gap:10px;
+  max-width:min(640px,86vw);
+  background:linear-gradient(180deg,rgba(63,216,196,.18),rgba(10,26,34,.92));
+  border:1px solid var(--accent);
+  border-radius:14px;
+  padding:10px 20px;
+  box-shadow:var(--shadow);
+  font-size:14px;
+  line-height:1.4;
+  text-align:left;
+}
+#tutorial-icon{font-size:20px;flex:none;}
+#tutorial-text{color:var(--ink);font-weight:600;}
+
+/* ---------- Indicador de estufa ---------- */
+#stove-indicator{
+  position:absolute;bottom:16px;left:14px;
+  background:var(--panel-bg);
+  border:1px solid var(--panel-border);
+  border-radius:10px;
+  padding:8px 14px;
+  font-family:var(--font-mono);
+  font-size:12.5px;
+  box-shadow:var(--shadow);
+}
+#stove-state{color:var(--danger);}
+#stove-state.on{color:var(--accent);}
+
+/* ---------- Objeto en mano ---------- */
+#held-info{
+  position:absolute;bottom:16px;right:14px;
+  background:var(--panel-bg);
+  border:1px solid var(--panel-border);
+  border-radius:10px;
+  padding:8px 14px;
+  font-family:var(--font-mono);
+  font-size:12px;
+  color:var(--muted);
+  min-width:170px;
+  text-align:right;
+  box-shadow:var(--shadow);
+}
+#held-info b{color:var(--ink);}
+
+/* ---------- Toast (mensajes emergentes) ---------- */
+#toast-wrap{
+  position:absolute;bottom:110px;left:50%;transform:translateX(-50%);
+  display:flex;flex-direction:column;gap:6px;align-items:center;
+  pointer-events:none;
+}
+.toast{
+  background:rgba(10,26,34,.94);
+  border:1px solid var(--panel-border);
+  color:var(--ink);
+  padding:8px 18px;
+  border-radius:20px;
+  font-size:13px;
+  box-shadow:var(--shadow);
+  opacity:0;
+  transform:translateY(8px);
+  transition:opacity .25s, transform .25s;
+  white-space:nowrap;
+}
+.toast.show{opacity:1;transform:translateY(0);}
+
+/* ---------- Botón reiniciar ---------- */
+#restart-btn{
+  position:absolute;top:14px;left:50%;transform:translateX(-50%);
+  pointer-events:auto;
+  background:var(--panel-bg);
+  border:1px solid var(--panel-border);
+  color:var(--muted);
+  font-size:12px;
+  padding:7px 14px;
+  border-radius:20px;
+  cursor:pointer;
+}
+#restart-btn:hover{color:var(--ink);border-color:var(--accent);}
+
+/* ---------- Ayuda de controles (esquina inferior, discreta) ---------- */
+#controls-hint{
+  position:absolute;bottom:16px;left:50%;transform:translateX(-50%);
+  font-size:11px;color:rgba(255,255,255,.55);
+  background:rgba(0,0,0,.4);
+  padding:5px 12px;border-radius:14px;
+  white-space:nowrap;
+}
+
+@media (max-width:640px){
+  #order-ticket{width:170px;font-size:11px;}
+  #hand-status{min-width:150px;}
+  #controls-hint{display:none;}
+  #tutorial-panel{font-size:12px;padding:8px 14px;top:52px;}
+  #tutorial-icon{font-size:16px;}
+}
