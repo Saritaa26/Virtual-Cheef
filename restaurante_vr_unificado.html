@@ -350,6 +350,24 @@ html,body{
   white-space:nowrap;
 }
 
+/* ---------- Invertir giro de cabeza (calibración del Modo Cartón) ----------
+   El signo correcto de esta compensación varía según el celular/navegador
+   y no se puede adivinar sin probarlo en el dispositivo real — este botón
+   deja que el usuario lo invierta él mismo con un toque (ver cardboard.js). */
+#invert-gyro-btn{
+  position:absolute;bottom:50px;left:50%;transform:translateX(-50%);
+  pointer-events:auto;
+  background:var(--panel-bg);
+  border:1px solid var(--panel-border);
+  color:var(--muted);
+  font-size:11px;
+  padding:5px 12px;
+  border-radius:16px;
+  cursor:pointer;
+  white-space:nowrap;
+}
+#invert-gyro-btn:hover{color:var(--ink);border-color:var(--accent);}
+
 /* ============================================================
    MODO CARTÓN (gafas de plástico/cartón + celular)
    Divisor central para alinear el celular dentro de las gafas, y
@@ -373,31 +391,31 @@ body.cardboard-on #hud,body.cardboard-on #start-screen{display:none!important;}
 body.cardboard-on #cardboard-divider,body.cardboard-on #cardboard-exit{display:block;}
 
 /* ================================================================
-   PARIDAD VISUAL MÓVIL — build unificado
+   PARIDAD VISUAL MÓVIL
    El HUD de arriba se pensó primero para pantallas anchas de PC.
-   Este bloque (que se aplica DESPUÉS y por lo tanto gana en la
-   cascada) comprime y reacomoda los paneles en celulares angostos,
+   Este bloque comprime y reacomoda los paneles en celulares angostos
    y respeta el notch/la barra de gestos de iOS, para que en un
-   teléfono no se vea ni un solo elemento cortado o fuera de vista.
+   teléfono no se vea ni un solo elemento cortado ni superpuesto.
    ================================================================ */
-
-/* Tablet / celular en horizontal.
-   Los botones de arriba (Reiniciar / Modo Cartón) estaban centrados
-   LADO A LADO — con el panel de manos angosto de PC eso nunca chocaba,
-   pero en un celular el panel de manos se vuelve casi tan ancho como
-   la mitad de la pantalla y sí llegaba a pisar el botón. Se apilan uno
-   encima del otro para liberar todo el ancho central. */
 @media (max-width:640px){
   #order-ticket{width:170px;font-size:11px;}
   #hand-status{min-width:150px;}
   #tutorial-panel{top:96px;font-size:12px;padding:8px 14px;}
   #tutorial-icon{font-size:16px;}
+  /* Reiniciar/Modo Cartón estaban centrados lado a lado — con el
+     panel de manos angosto de PC nunca chocaba, pero en celular el
+     panel se vuelve casi tan ancho como media pantalla y sí llegaba
+     a pisar el botón. Se apilan uno encima del otro. */
   #restart-btn,#cardboard-btn{
     font-size:11px;padding:6px 10px;
     left:50%;transform:translateX(-50%);
   }
   #restart-btn{top:14px;}
   #cardboard-btn{top:44px;}
+  /* Se queda en su propia fila (bottom:50, heredado) en vez de bajar
+     a bottom:16 — ahí abajo ya compiten stove-indicator/held-info por
+     el mismo ancho y en celular angosto sí llegan a chocar. */
+  #invert-gyro-btn{font-size:10px;padding:5px 10px;}
 }
 
 /* Celular angosto en vertical: aquí es donde el diseño de PC se
@@ -422,7 +440,7 @@ body.cardboard-on #cardboard-divider,body.cardboard-on #cardboard-exit{display:b
    apilados, los botones centrales pueden rozar los paneles de las
    esquinas si estos son muy anchos — se angostan un poco más. */
 @media (max-width:340px){
-  #hand-status{min-width:74px;font-size:9px;padding:5px 6px;}
+  #hand-status{min-width:64px;font-size:9px;padding:5px 6px;}
   #order-ticket{width:98px;}
   #order-ticket h3{font-size:9px;}
   #score-box{font-size:13px;padding:5px 10px;}
@@ -524,6 +542,7 @@ body.cardboard-on #cardboard-divider,body.cardboard-on #cardboard-exit{display:b
 
   <div id="toast-wrap"></div>
 
+  <button id="invert-gyro-btn" title="Si en el Modo Cartón la vista gira al revés de tu cabeza, toca aquí">↔ Invertir giro de cabeza</button>
   <div id="controls-hint">WASD mover · ←→ girar · ↑↓ mirar · C agacharse · pinza = agarrar</div>
 </div>
 
@@ -2779,7 +2798,7 @@ const Guide = (() => {
 window.Guide = Guide;
 </script>
 
-<!-- ── cardboard.js: mirar con la cabeza (DeviceOrientation) + render estéreo ── -->
+<!-- ── cardboard.js: mirar con la cabeza (DeviceOrientation) + render estéreo + botón de invertir giro ── -->
 <script>
 /* ============================================================
    CARDBOARD.JS — Modo Cartón (gafas de plástico/cartón + celular)
@@ -2839,6 +2858,22 @@ window.Guide = Guide;
   const _q1 = new THREE.Quaternion(-Math.sqrt(0.5), 0, 0, Math.sqrt(0.5)); // -90° en X
   const _deviceQ = new THREE.Quaternion();
 
+  // El Modo Cartón siempre bloquea la pantalla en horizontal
+  // (screen.orientation.lock('landscape')), así que hay que compensar
+  // esa rotación de 90°. Ese término (orient) es el más sensible al
+  // navegador/celular concreto — el signo correcto varía según el
+  // fabricante y no hay forma honesta de adivinarlo sin probarlo en el
+  // celular real. En vez de arriesgarnos a dejarlo al revés, queda
+  // como un interruptor de un toque: el botón "↔ Invertir giro de
+  // cabeza" del HUD llama a toggleOrientSign() y lo recuerda para la
+  // próxima vez (localStorage), así que solo hay que probarlo UNA vez.
+  let orientSign = parseFloat(localStorage.getItem('rvr_orientSign')) || 1;
+  function toggleOrientSign() {
+    orientSign *= -1;
+    localStorage.setItem('rvr_orientSign', String(orientSign));
+    if (Game.showToast) Game.showToast('↔ Giro de cabeza: ' + (orientSign < 0 ? 'invertido' : 'normal') + ' — prueba el Modo Cartón de nuevo');
+  }
+
   // Algoritmo estándar (el mismo que usan three.js y la mayoría de
   // visores "phone as VR") para convertir alpha/beta/gamma del
   // sensor, más el ángulo de rotación de pantalla, en un quaternion.
@@ -2847,7 +2882,7 @@ window.Guide = Guide;
     const beta = THREE.MathUtils.degToRad(e.beta || 0);
     const gamma = THREE.MathUtils.degToRad(e.gamma || 0);
     const screenAngle = (screen.orientation && screen.orientation.angle) || window.orientation || 0;
-    const orient = THREE.MathUtils.degToRad(screenAngle);
+    const orient = THREE.MathUtils.degToRad(screenAngle) * orientSign;
     _euler.set(beta, alpha, -gamma, 'YXZ');
     out.setFromEuler(_euler);
     out.multiply(_q1);
@@ -2960,6 +2995,7 @@ window.Guide = Guide;
 
   document.getElementById('cardboard-btn').addEventListener('click', enterCardboard);
   document.querySelectorAll('#cardboard-exit button').forEach(b => b.addEventListener('click', exitCardboard));
+  document.getElementById('invert-gyro-btn').addEventListener('click', toggleOrientSign);
 })();
 </script>
 </body>

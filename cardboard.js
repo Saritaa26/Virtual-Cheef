@@ -56,6 +56,22 @@
   const _q1 = new THREE.Quaternion(-Math.sqrt(0.5), 0, 0, Math.sqrt(0.5)); // -90° en X
   const _deviceQ = new THREE.Quaternion();
 
+  // El Modo Cartón siempre bloquea la pantalla en horizontal
+  // (screen.orientation.lock('landscape')), así que hay que compensar
+  // esa rotación de 90°. Ese término (orient) es el más sensible al
+  // navegador/celular concreto — el signo correcto varía según el
+  // fabricante y no hay forma honesta de adivinarlo sin probarlo en el
+  // celular real. En vez de arriesgarnos a dejarlo al revés, queda
+  // como un interruptor de un toque: el botón "↔ Invertir giro de
+  // cabeza" del HUD llama a toggleOrientSign() y lo recuerda para la
+  // próxima vez (localStorage), así que solo hay que probarlo UNA vez.
+  let orientSign = parseFloat(localStorage.getItem('rvr_orientSign')) || 1;
+  function toggleOrientSign() {
+    orientSign *= -1;
+    localStorage.setItem('rvr_orientSign', String(orientSign));
+    if (Game.showToast) Game.showToast('↔ Giro de cabeza: ' + (orientSign < 0 ? 'invertido' : 'normal') + ' — prueba el Modo Cartón de nuevo');
+  }
+
   // Algoritmo estándar (el mismo que usan three.js y la mayoría de
   // visores "phone as VR") para convertir alpha/beta/gamma del
   // sensor, más el ángulo de rotación de pantalla, en un quaternion.
@@ -64,7 +80,7 @@
     const beta = THREE.MathUtils.degToRad(e.beta || 0);
     const gamma = THREE.MathUtils.degToRad(e.gamma || 0);
     const screenAngle = (screen.orientation && screen.orientation.angle) || window.orientation || 0;
-    const orient = THREE.MathUtils.degToRad(screenAngle);
+    const orient = THREE.MathUtils.degToRad(screenAngle) * orientSign;
     _euler.set(beta, alpha, -gamma, 'YXZ');
     out.setFromEuler(_euler);
     out.multiply(_q1);
@@ -177,4 +193,5 @@
 
   document.getElementById('cardboard-btn').addEventListener('click', enterCardboard);
   document.querySelectorAll('#cardboard-exit button').forEach(b => b.addEventListener('click', exitCardboard));
+  document.getElementById('invert-gyro-btn').addEventListener('click', toggleOrientSign);
 })();
