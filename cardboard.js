@@ -28,13 +28,24 @@
         dirección a la que ya estabas mirando, y desde ahí solo se
         seguyen los giros relativos de la cabeza.
 
-     3) Divisor central + botones de salida duplicados (uno por
+     3) Caminar en el sitio: mientras el Modo Cartón está activo, se
+        lee el acelerómetro (evento `devicemotion`) y se detecta el
+        rebote rítmico de cada paso real. No hay forma confiable de
+        distinguir "paso hacia adelante" de "paso hacia atrás" solo
+        con el acelerómetro, así que — igual que la mayoría de apps
+        de RV con "caminar en el sitio" — cada paso avanza en la
+        dirección a la que YA estás mirando; para ir hacia otro lado,
+        se gira la cabeza y se vuelve a caminar. El avance respeta
+        las mismas paredes/muebles que el teclado (World.resolvePlayerXZ).
+
+     4) Divisor central + botones de salida duplicados (uno por
         ojo), pantalla completa y bloqueo de orientación horizontal
         — igual que en MedVR.
 
-   Este archivo SOLO lee `World.camera` / `World.renderer` y
-   `Game.showToast`. No modifica tracking.js, world.js, items.js,
-   game.js ni guide.js, y no depende de que ellos lo conozcan a él.
+   Este archivo SOLO lee `World.camera` / `World.renderer` /
+   `World.resolvePlayerXZ` y `Game.showToast`. No modifica
+   tracking.js, world.js, items.js, game.js ni guide.js, y no
+   depende de que ellos lo conozcan a él.
    ============================================================ */
 
 (() => {
@@ -111,6 +122,68 @@
   }
 
   // ══════════════════════════════════════════════════════════
+  // CAMINAR EN EL SITIO (detección de pasos por acelerómetro)
+  // ══════════════════════════════════════════════════════════
+  // `devicemotion` dispara MUCHO más seguido que un cuadro de render,
+  // así que aquí solo se CUENTAN los pasos (rápido, barato); el
+  // movimiento real de la cámara se aplica una sola vez por cuadro,
+  // dentro del render (ver applyWalkOffset), igual que el giro.
+  const STEP_THRESHOLD = 1.6;   // m/s² de "rebote" por encima de lo normal para contar un paso
+  const STEP_RELEASE = 0.6;     // hay que bajar de esto antes de poder contar el siguiente paso
+  const STEP_COOLDOWN = 280;    // ms mínimos entre pasos (evita contar un mismo paso dos veces)
+  const STEP_DISTANCE = 0.5;    // metros que avanza cada paso detectado
+  let baselineMag = null;       // línea base suavizada (sirve tanto si el navegador da
+                                 // acceleration con gravedad como sin ella — no hace falta saberlo)
+  let overThreshold = false;
+  let lastStepAt = 0;
+  let pendingSteps = 0;
+
+  function onDeviceMotion(e) {
+    const a = (e.acceleration && e.acceleration.x != null) ? e.acceleration : e.accelerationIncludingGravity;
+    if (!a || a.x == null) return;
+    const mag = Math.sqrt((a.x || 0) ** 2 + (a.y || 0) ** 2 + (a.z || 0) ** 2);
+    if (baselineMag == null) baselineMag = mag;
+    else baselineMag = baselineMag * 0.9 + mag * 0.1;
+    const spike = mag - baselineMag;
+    const now = performance.now();
+    if (!overThreshold && spike > STEP_THRESHOLD && now - lastStepAt > STEP_COOLDOWN) {
+      overThreshold = true;
+      lastStepAt = now;
+      pendingSteps++;
+    } else if (overThreshold && spike < STEP_RELEASE) {
+      overThreshold = false;
+    }
+  }
+  window.addEventListener('devicemotion', onDeviceMotion);
+
+  let walkOffsetX = 0, walkOffsetZ = 0; // avance acumulado por pasos, ya corregido por colisión
+  const _fwd = new THREE.Vector3();
+
+  // Se llama una vez por cuadro (dentro del render, después del giro):
+  // convierte los pasos pendientes en avance real, respetando paredes
+  // y muebles (World.resolvePlayerXZ es la MISMA colisión del teclado).
+  function applyWalkOffset() {
+    if (!cardboardMode) return;
+    const baseX = camera.position.x, baseZ = camera.position.z; // = posición del jugador este cuadro, sin nuestro avance
+    let offX = walkOffsetX, offZ = walkOffsetZ;
+    if (pendingSteps > 0) {
+      _fwd.set(0, 0, -1).applyQuaternion(camera.quaternion);
+      _fwd.y = 0;
+      if (_fwd.lengthSq() > 1e-6) {
+        _fwd.normalize();
+        offX += _fwd.x * STEP_DISTANCE * pendingSteps;
+        offZ += _fwd.z * STEP_DISTANCE * pendingSteps;
+      }
+      pendingSteps = 0;
+    }
+    const resolved = World.resolvePlayerXZ(baseX + offX, baseZ + offZ);
+    walkOffsetX = resolved.x - baseX;
+    walkOffsetZ = resolved.z - baseZ;
+    camera.position.x = resolved.x;
+    camera.position.z = resolved.z;
+  }
+
+  // ══════════════════════════════════════════════════════════
   // RENDER ESTÉREO (misma técnica que MedVR: parchar renderer.render)
   // ══════════════════════════════════════════════════════════
   function installStereoRenderer() {
@@ -121,7 +194,7 @@
 
     renderer.render = function (scene, cam) {
       if (!cardboardMode || !cam.isPerspectiveCamera) { originalRender(scene, cam); return; }
-      if (cam === camera) applyGyroToCamera();
+      if (cam === camera) { applyGyroToCamera(); applyWalkOffset(); }
 
       const w = renderer.domElement.clientWidth, h = renderer.domElement.clientHeight;
       const halfW = w / 2;
@@ -160,6 +233,8 @@
   // ══════════════════════════════════════════════════════════
   function requestMotionPermission() {
     const DOE = window.DeviceOrientationEvent;
+    const DME = window.DeviceMotionEvent; // permiso separado, lo usa el detector de pasos
+    if (DME && typeof DME.requestPermission === 'function') DME.requestPermission().catch(() => {});
     const needsPermission = DOE && typeof DOE.requestPermission === 'function';
     if (!needsPermission) return Promise.resolve(true);
     return DOE.requestPermission().then(state => state === 'granted').catch(() => false);
@@ -188,8 +263,8 @@
       if (el.requestFullscreen) el.requestFullscreen().catch(() => {});
       if (screen.orientation && screen.orientation.lock) screen.orientation.lock('landscape').catch(() => {});
       if (Game.showToast) Game.showToast(ok
-        ? '🥽 Modo Cartón activo — coloca el celular en las gafas.'
-        : '🥽 Modo Cartón activo (sin giroscopio: usa ←→ ↑↓ para mirar).');
+        ? '🥽 Modo Cartón activo — coloca el celular en las gafas y camina para avanzar.'
+        : '🥽 Modo Cartón activo (sin sensores: usa ←→ ↑↓ para mirar y WASD para moverte).');
     });
   }
 
