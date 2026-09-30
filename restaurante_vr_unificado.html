@@ -743,7 +743,13 @@ const HandTracking = (() => {
     });
     mpHands.setOptions({
       maxNumHands: 2,
-      modelComplexity: 1,
+      // 0 = modelo "lite" (antes 1 = "full"). El juego solo necesita la
+      // posición de la punta del pulgar/índice (pinza) y la velocidad de
+      // la palma (picar) — no requiere la precisión extra del modelo
+      // completo, y el modelo lite corre bastante más rápido en un
+      // celular, dejando más margen de cuadros por segundo para el
+      // render 3D (sobre todo en Modo Cartón, que dibuja dos veces).
+      modelComplexity: 0,
       minDetectionConfidence: 0.6,
       minTrackingConfidence: 0.6
     });
@@ -1079,16 +1085,21 @@ const World = (() => {
     ceiling.position.y = WALL_H;
     scene.add(ceiling);
 
-    // Paneles de luz LED empotrados en el techo (rejilla 3x3) — la
-    // principal fuente de una iluminación pareja y "de restaurante".
+    // Paneles de luz LED empotrados en el techo (rejilla 2x2 — antes
+    // 3x3/9 luces). La luz ambiental + hemisférica ya da una base pareja
+    // y brillante; estos paneles solo aportan el brillo puntual encima.
+    // Menos luces en tiempo real = más FPS, sobre todo en Modo Cartón,
+    // donde cada cuadro se dibuja DOS veces (una por ojo) y el costo de
+    // cada luz se paga el doble. Se compensa con un poco más de
+    // alcance/intensidad para que la cocina no se vea más oscura.
     const panelMat = new THREE.MeshBasicMaterial({ color: 0xffffff });
-    for (const px of [-3, 0, 3]) {
-      for (const pz of [-3.6, 0, 3.6]) {
+    for (const px of [-2.7, 2.7]) {
+      for (const pz of [-2.7, 2.7]) {
         const panel = new THREE.Mesh(new THREE.PlaneGeometry(0.9, 0.9), panelMat);
         panel.rotation.x = Math.PI / 2;
         panel.position.set(px, WALL_H - 0.02, pz);
         scene.add(panel);
-        const bulb = new THREE.PointLight(0xffffff, 0.9, 7, 0);
+        const bulb = new THREE.PointLight(0xffffff, 1.15, 10, 0);
         bulb.position.set(px, WALL_H - 0.15, pz);
         scene.add(bulb);
       }
@@ -2970,11 +2981,21 @@ window.Guide = Guide;
   // ══════════════════════════════════════════════════════════
   // ENTRAR / SALIR DEL MODO CARTÓN
   // ══════════════════════════════════════════════════════════
+  // El render estéreo dibuja la escena DOS veces por cuadro (una por
+  // ojo) — el costo de cada píxel se paga el doble. Para que los FPS
+  // no se desplomen (y con ellos la fluidez del giro de cabeza, que
+  // depende de cuántos cuadros por segundo se alcanzan a dibujar) se
+  // baja la resolución interna del render SOLO mientras dura el Modo
+  // Cartón, y se restaura tal cual estaba al salir.
+  const originalPixelRatio = renderer.getPixelRatio();
+  const CARDBOARD_PIXEL_RATIO = Math.min(originalPixelRatio, 1.25);
+
   function enterCardboard() {
     requestMotionPermission().then(ok => {
       installStereoRenderer();
       calibrationQuaternion = null; // recalibrar el rumbo al entrar
       cardboardMode = true;
+      renderer.setPixelRatio(CARDBOARD_PIXEL_RATIO);
       document.body.classList.add('cardboard-on');
       const el = document.documentElement;
       if (el.requestFullscreen) el.requestFullscreen().catch(() => {});
@@ -2987,6 +3008,7 @@ window.Guide = Guide;
 
   function exitCardboard() {
     cardboardMode = false;
+    renderer.setPixelRatio(originalPixelRatio);
     document.body.classList.remove('cardboard-on');
     if (document.exitFullscreen) document.exitFullscreen().catch(() => {});
     if (screen.orientation && screen.orientation.unlock) screen.orientation.unlock();

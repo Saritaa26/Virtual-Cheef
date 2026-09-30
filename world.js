@@ -299,16 +299,21 @@ const World = (() => {
     ceiling.position.y = WALL_H;
     scene.add(ceiling);
 
-    // Paneles de luz LED empotrados en el techo (rejilla 3x3) — la
-    // principal fuente de una iluminación pareja y "de restaurante".
+    // Paneles de luz LED empotrados en el techo (rejilla 2x2 — antes
+    // 3x3/9 luces). La luz ambiental + hemisférica ya da una base pareja
+    // y brillante; estos paneles solo aportan el brillo puntual encima.
+    // Menos luces en tiempo real = más FPS, sobre todo en Modo Cartón,
+    // donde cada cuadro se dibuja DOS veces (una por ojo) y el costo de
+    // cada luz se paga el doble. Se compensa con un poco más de
+    // alcance/intensidad para que la cocina no se vea más oscura.
     const panelMat = new THREE.MeshBasicMaterial({ color: 0xffffff });
-    for (const px of [-3, 0, 3]) {
-      for (const pz of [-3.6, 0, 3.6]) {
+    for (const px of [-2.7, 2.7]) {
+      for (const pz of [-2.7, 2.7]) {
         const panel = new THREE.Mesh(new THREE.PlaneGeometry(0.9, 0.9), panelMat);
         panel.rotation.x = Math.PI / 2;
         panel.position.set(px, WALL_H - 0.02, pz);
         scene.add(panel);
-        const bulb = new THREE.PointLight(0xffffff, 0.9, 7, 0);
+        const bulb = new THREE.PointLight(0xffffff, 1.15, 10, 0);
         bulb.position.set(px, WALL_H - 0.15, pz);
         scene.add(bulb);
       }

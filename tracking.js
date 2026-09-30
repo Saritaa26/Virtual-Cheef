@@ -180,7 +180,13 @@ const HandTracking = (() => {
     });
     mpHands.setOptions({
       maxNumHands: 2,
-      modelComplexity: 1,
+      // 0 = modelo "lite" (antes 1 = "full"). El juego solo necesita la
+      // posición de la punta del pulgar/índice (pinza) y la velocidad de
+      // la palma (picar) — no requiere la precisión extra del modelo
+      // completo, y el modelo lite corre bastante más rápido en un
+      // celular, dejando más margen de cuadros por segundo para el
+      // render 3D (sobre todo en Modo Cartón, que dibuja dos veces).
+      modelComplexity: 0,
       minDetectionConfidence: 0.6,
       minTrackingConfidence: 0.6
     });

@@ -168,11 +168,21 @@
   // ══════════════════════════════════════════════════════════
   // ENTRAR / SALIR DEL MODO CARTÓN
   // ══════════════════════════════════════════════════════════
+  // El render estéreo dibuja la escena DOS veces por cuadro (una por
+  // ojo) — el costo de cada píxel se paga el doble. Para que los FPS
+  // no se desplomen (y con ellos la fluidez del giro de cabeza, que
+  // depende de cuántos cuadros por segundo se alcanzan a dibujar) se
+  // baja la resolución interna del render SOLO mientras dura el Modo
+  // Cartón, y se restaura tal cual estaba al salir.
+  const originalPixelRatio = renderer.getPixelRatio();
+  const CARDBOARD_PIXEL_RATIO = Math.min(originalPixelRatio, 1.25);
+
   function enterCardboard() {
     requestMotionPermission().then(ok => {
       installStereoRenderer();
       calibrationQuaternion = null; // recalibrar el rumbo al entrar
       cardboardMode = true;
+      renderer.setPixelRatio(CARDBOARD_PIXEL_RATIO);
       document.body.classList.add('cardboard-on');
       const el = document.documentElement;
       if (el.requestFullscreen) el.requestFullscreen().catch(() => {});
@@ -185,6 +195,7 @@
 
   function exitCardboard() {
     cardboardMode = false;
+    renderer.setPixelRatio(originalPixelRatio);
     document.body.classList.remove('cardboard-on');
     if (document.exitFullscreen) document.exitFullscreen().catch(() => {});
     if (screen.orientation && screen.orientation.unlock) screen.orientation.unlock();
