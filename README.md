@@ -7,8 +7,8 @@ usando el giroscopio del teléfono, más una vista estéreo).
 
 ## 🔗 Jugarlo
 
-**https://TU-USUARIO.github.io/TU-REPO/**
-*(se actualiza con la URL real una vez publicado en GitHub Pages)*
+**https://saritaa26.github.io/Virtual-Cheef/**
+*(activa GitHub Pages en Settings → Pages para que este link funcione — ver más abajo)*
 
 Ábrelo directamente en el navegador del celular (Chrome recomendado en
 Android). No requiere instalar nada.
