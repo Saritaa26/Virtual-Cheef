@@ -42,10 +42,23 @@
         ojo), pantalla completa y bloqueo de orientación horizontal
         — igual que en MedVR.
 
+     5) HUD visible en ambos ojos: el HUD normal (#hud) se oculta
+        entero porque está pensado para una sola pantalla completa,
+        pero para poder cocinar "a ciegas" con las gafas puestas hace
+        falta seguir viendo la pinza de cada mano, qué llevas en la
+        mano, el pedido y el tutorial. Se clonan esos paneles en dos
+        copias (una por mitad de pantalla) y se mantienen al día con
+        un MutationObserver que observa el #hud original — así sigue
+        funcionando aunque game.js/guide.js cambien ese contenido más
+        adelante, sin que ellos sepan que el Modo Cartón existe. La
+        cámara trasera (tracking.js) nunca se apaga ni se pausa en
+        Modo Cartón, así que las manos se siguen reconociendo igual.
+
    Este archivo SOLO lee `World.camera` / `World.renderer` /
-   `World.resolvePlayerXZ` y `Game.showToast`. No modifica
-   tracking.js, world.js, items.js, game.js ni guide.js, y no
-   depende de que ellos lo conozcan a él.
+   `World.resolvePlayerXZ` y `Game.showToast`, y clona (sin modificar)
+   nodos del `#hud` que ya existe en el HTML. No modifica tracking.js,
+   world.js, items.js, game.js ni guide.js, y no depende de que ellos
+   lo conozcan a él.
    ============================================================ */
 
 (() => {
@@ -184,6 +197,56 @@
   }
 
   // ══════════════════════════════════════════════════════════
+  // HUD VISIBLE EN AMBOS OJOS (ver las manos para cocinar)
+  // ══════════════════════════════════════════════════════════
+  // #hud se oculta entero en Modo Cartón (ver styles.css) porque sus
+  // paneles están calculados para una sola pantalla completa, no para
+  // verse partidos en dos mitades. Pero game.js/guide.js lo siguen
+  // actualizando igual aunque esté invisible (display:none no detiene
+  // el juego). Aquí se clonan SOLO los paneles necesarios para cocinar
+  // a ciegas — pinza de cada mano, qué llevas en la mano, pedido,
+  // tutorial, estufa — dentro de dos copias (una por ojo), y se
+  // mantienen al día con un MutationObserver: así sigue funcionando
+  // aunque game.js/guide.js cambien ese contenido más adelante, sin
+  // que ellos necesiten saber que el Modo Cartón existe.
+  const HUD_CLONE_IDS = ['top-left', 'order-ticket', 'tutorial-panel', 'stove-indicator', 'held-info', 'toast-wrap'];
+  const hudEl = document.getElementById('hud');
+  let hudLeft = null, hudRight = null, hudObserver = null;
+
+  function refreshHudClones() {
+    [hudLeft, hudRight].forEach(wrap => {
+      if (!wrap) return;
+      wrap.innerHTML = '';
+      HUD_CLONE_IDS.forEach(id => {
+        const src = document.getElementById(id);
+        if (src) wrap.appendChild(src.cloneNode(true));
+      });
+    });
+  }
+
+  function installHudClones() {
+    if (!hudLeft) {
+      hudLeft = document.createElement('div');
+      hudLeft.className = 'cardboard-hud cardboard-hud-left';
+      document.body.appendChild(hudLeft);
+    }
+    if (!hudRight) {
+      hudRight = document.createElement('div');
+      hudRight.className = 'cardboard-hud cardboard-hud-right';
+      document.body.appendChild(hudRight);
+    }
+    refreshHudClones();
+    if (!hudObserver) {
+      hudObserver = new MutationObserver(refreshHudClones);
+      hudObserver.observe(hudEl, { childList: true, subtree: true, attributes: true, characterData: true });
+    }
+  }
+
+  function stopHudClones() {
+    if (hudObserver) { hudObserver.disconnect(); hudObserver = null; }
+  }
+
+  // ══════════════════════════════════════════════════════════
   // RENDER ESTÉREO (misma técnica que MedVR: parchar renderer.render)
   // ══════════════════════════════════════════════════════════
   function installStereoRenderer() {
@@ -259,6 +322,7 @@
       cardboardMode = true;
       renderer.setPixelRatio(CARDBOARD_PIXEL_RATIO);
       document.body.classList.add('cardboard-on');
+      installHudClones();
       const el = document.documentElement;
       if (el.requestFullscreen) el.requestFullscreen().catch(() => {});
       if (screen.orientation && screen.orientation.lock) screen.orientation.lock('landscape').catch(() => {});
@@ -272,6 +336,7 @@
     cardboardMode = false;
     renderer.setPixelRatio(originalPixelRatio);
     document.body.classList.remove('cardboard-on');
+    stopHudClones();
     if (document.exitFullscreen) document.exitFullscreen().catch(() => {});
     if (screen.orientation && screen.orientation.unlock) screen.orientation.unlock();
     if (Game.showToast) Game.showToast('🥽 Modo Cartón desactivado.');
