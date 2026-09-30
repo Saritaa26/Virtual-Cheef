@@ -2995,17 +2995,36 @@ window.Guide = Guide;
 
   // Ancla la primera lectura del giroscopio a la orientación actual
   // de la cámara, para no "saltar" de golpe a un rumbo arbitrario.
+  let justCalibrated = false;
   function calibrateGyro() {
     if (!lastOrientationEvent) { calibrationQuaternion = null; return; }
     deviceQuaternion(lastOrientationEvent, _deviceQ);
     calibrationQuaternion = camera.quaternion.clone().multiply(_deviceQ.clone().invert());
+    justCalibrated = true;
   }
+
+  // Suavizado de la orientación: el sensor de muchos celulares (sobre todo
+  // gama media, sin giroscopio dedicado) llega con ruido frame a frame, y
+  // copiarlo tal cual hace que la vista "tiemble" aunque la cabeza esté
+  // quieta. En vez de copiar la orientación cruda, la cámara gira cada
+  // cuadro una FRACCIÓN del camino hacia el objetivo (slerp) — sigue el
+  // movimiento real del celular casi sin demora perceptible, pero absorbe
+  // el ruido de un cuadro suelto. 1 = sin suavizado (copia directa, como
+  // antes); valores más bajos = más suave pero con algo más de retraso.
+  const GYRO_SMOOTHING = 0.5;
+  const _targetQ = new THREE.Quaternion();
 
   function applyGyroToCamera() {
     if (!gyroActive || !lastOrientationEvent) return;
     if (!calibrationQuaternion) calibrateGyro();
     deviceQuaternion(lastOrientationEvent, _deviceQ);
-    camera.quaternion.copy(calibrationQuaternion).multiply(_deviceQ);
+    _targetQ.copy(calibrationQuaternion).multiply(_deviceQ);
+    if (justCalibrated) {
+      camera.quaternion.copy(_targetQ); // alineado exacto al entrar, sin arrastre
+      justCalibrated = false;
+    } else {
+      camera.quaternion.slerp(_targetQ, GYRO_SMOOTHING);
+    }
   }
 
   // ══════════════════════════════════════════════════════════
