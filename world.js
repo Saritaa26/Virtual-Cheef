@@ -128,8 +128,22 @@ const World = (() => {
 
   const camera = new THREE.PerspectiveCamera(65, innerWidth / innerHeight, 0.05, 80);
 
-  const renderer = new THREE.WebGLRenderer({ canvas: canvasEl, antialias: true, alpha: true });
-  renderer.setPixelRatio(Math.min(devicePixelRatio || 1, 2));
+  // Celular/tableta: se usa un camino más barato. El antialias por hardware
+  // (MSAA) es caro en GPUs móviles y casi no se nota en pantallas de alta
+  // densidad (≥2 píxeles por píxel CSS), así que solo se activa donde sí se
+  // nota y es barato. El factor de píxeles también arranca más bajo; Perf
+  // (perf.js) lo ajusta solo según los FPS reales que alcance el aparato.
+  const IS_MOBILE = /Android|iPhone|iPad|iPod|Mobile|Silk/i.test(navigator.userAgent) ||
+    (navigator.maxTouchPoints > 1 && window.matchMedia && matchMedia('(pointer:coarse)').matches);
+  const DPR = window.devicePixelRatio || 1;
+  const renderer = new THREE.WebGLRenderer({
+    canvas: canvasEl,
+    antialias: DPR < 2,
+    alpha: true,
+    powerPreference: 'high-performance',
+    stencil: false
+  });
+  renderer.setPixelRatio(IS_MOBILE ? Math.min(DPR, 1.5) : Math.min(DPR, 2));
   renderer.setSize(innerWidth, innerHeight);
   renderer.setClearColor(0x000000, 0);
   renderer.outputColorSpace = THREE.SRGBColorSpace;
@@ -306,6 +320,10 @@ const World = (() => {
     // donde cada cuadro se dibuja DOS veces (una por ojo) y el costo de
     // cada luz se paga el doble. Se compensa con un poco más de
     // alcance/intensidad para que la cocina no se vea más oscura.
+    // En celular solo 2 de los 4 paneles emiten luz real (los 4 se dibujan):
+    // cada PointLight se evalúa por píxel en TODOS los materiales de la
+    // escena, y con el render estéreo del Modo Cartón ese costo se duplica.
+    // Los 2 focos centrales compensan con más intensidad y alcance.
     const panelMat = new THREE.MeshBasicMaterial({ color: 0xffffff });
     for (const px of [-2.7, 2.7]) {
       for (const pz of [-2.7, 2.7]) {
@@ -313,8 +331,11 @@ const World = (() => {
         panel.rotation.x = Math.PI / 2;
         panel.position.set(px, WALL_H - 0.02, pz);
         scene.add(panel);
-        const bulb = new THREE.PointLight(0xffffff, 1.15, 10, 0);
-        bulb.position.set(px, WALL_H - 0.15, pz);
+        if (IS_MOBILE && pz > 0) continue;
+        const bulb = IS_MOBILE
+          ? new THREE.PointLight(0xffffff, 1.9, 13, 0)
+          : new THREE.PointLight(0xffffff, 1.15, 10, 0);
+        bulb.position.set(px, WALL_H - 0.15, IS_MOBILE ? 0 : pz);
         scene.add(bulb);
       }
     }
@@ -588,7 +609,146 @@ const World = (() => {
     });
   })();
 
+  // ══════════════════════════════════════════════════════════
+  // FUSIÓN DE MALLAS ESTÁTICAS (menos llamadas de dibujo por cuadro)
+  // ══════════════════════════════════════════════════════════
+  // La cocina se construye con ~250 mallas sueltas = ~210 llamadas de
+  // dibujo por cuadro, y en el Modo Cartón se pagan DOS veces. El costo en
+  // un celular no lo pone la cantidad de triángulos (solo ~20 mil) sino la
+  // cantidad de llamadas. Aquí todo lo que NUNCA se mueve ni cambia de
+  // material se funde en una sola malla por material (mismos triángulos,
+  // mismo aspecto, muchas menos llamadas). Se dejan sueltas, a propósito:
+  //   · lo animado o que otros módulos tocan (nevera, puertas, llamas,
+  //     aspas de la licuadora, botón de la estufa);
+  //   · lo transparente (el orden de dibujo importa).
+  // `?nobatch` en la URL desactiva la fusión (para comparar a ojo).
+  //
+  // Se llama UNA vez desde game.js cuando ya cargaron items.js y guide.js
+  // (la mayor parte de la decoración — canastas, frascos, utensilios del
+  // estante — la crea items.js, no este archivo). `extraDynamic` son las
+  // mallas/objetos que esos módulos mueven o cuyo material cambian (brillos).
+  // Se separan dos zonas (cocina al fondo / resto del local) para que el
+  // recorte por cámara siga descartando lo que queda a la espalda.
+  const batchStats = { before: 0, after: 0, merged: 0, batches: 0, done: false };
+
+  const _bbC = new THREE.Vector3();
+  const mergeMatKey = (m) => [m.type, m.color && m.color.getHex(), m.roughness, m.metalness,
+    m.emissive && m.emissive.getHex(), m.emissiveIntensity, m.map && m.map.uuid, m.side, m.flatShading,
+    m.opacity, m.depthWrite, m.depthTest, m.polygonOffset, m.toneMapped, m.fog].join('|');
+  const exoticMat = (m) => m.normalMap || m.bumpMap || m.alphaMap || m.envMap || m.aoMap || m.lightMap ||
+    m.displacementMap || m.roughnessMap || m.metalnessMap || m.emissiveMap || m.vertexColors || m.wireframe || m.alphaTest > 0;
+  const hiddenAncestor = (o) => { for (let p = o; p; p = p.parent) if (!p.visible) return true; return false; };
+
+  // ¿Esta malla se puede fundir con otras? (un solo material normal, opaco, con normales)
+  function mergeable(o) {
+    const m = o.material, g = o.geometry;
+    return o.isMesh && m && !Array.isArray(m) && !m.transparent && !exoticMat(m) &&
+      g && g.attributes.position && g.attributes.normal && !hiddenAncestor(o);
+  }
+
+  // Funde `parts` (todas con el mismo material) en UNA malla. `toTarget` es la
+  // matriz que lleva cada vértice (desde su espacio de mundo) al espacio donde
+  // vivirá la malla fundida: identidad para la escena, o el inverso del grupo.
+  function buildMerged(parts, toTarget) {
+    let total = 0;
+    const rel = new THREE.Matrix4();
+    const prepared = parts.map(o => {
+      const g = o.geometry.index ? o.geometry.toNonIndexed() : o.geometry.clone();
+      rel.multiplyMatrices(toTarget, o.matrixWorld);
+      g.applyMatrix4(rel);                                              // posición y normales al espacio destino
+      if (rel.determinant() < 0) {                                      // espejo: se invierte el orden de los triángulos
+        for (const name of ['position', 'normal', 'uv']) {
+          const a = g.attributes[name]; if (!a) continue;
+          const sz = a.itemSize;
+          for (let i = 0; i < a.count; i += 3) {
+            for (let k = 0; k < sz; k++) {
+              const t = a.array[i * sz + k];
+              a.array[i * sz + k] = a.array[(i + 2) * sz + k];
+              a.array[(i + 2) * sz + k] = t;
+            }
+          }
+        }
+      }
+      total += g.attributes.position.count;
+      return g;
+    });
+    const pos = new Float32Array(total * 3), nor = new Float32Array(total * 3), uv = new Float32Array(total * 2);
+    let off = 0;
+    for (const g of prepared) {
+      const n = g.attributes.position.count;
+      pos.set(g.attributes.position.array, off * 3);
+      nor.set(g.attributes.normal.array, off * 3);
+      if (g.attributes.uv) uv.set(g.attributes.uv.array, off * 2);
+      off += n; g.dispose();
+    }
+    const merged = new THREE.BufferGeometry();
+    merged.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+    merged.setAttribute('normal', new THREE.BufferAttribute(nor, 3));
+    merged.setAttribute('uv', new THREE.BufferAttribute(uv, 2));
+    merged.computeBoundingSphere();
+    const mesh = new THREE.Mesh(merged, parts[0].material);
+    mesh.matrixAutoUpdate = false;
+    return mesh;
+  }
+
+  function mergeGroupsOf(groups, toTarget, addTo) {
+    for (const grp of groups.values()) {
+      if (grp.length < 2) continue;   // fundir una sola malla no ahorra nada
+      addTo.add(buildMerged(grp, toTarget));
+      for (const o of grp) { o.parent.remove(o); o.geometry.dispose(); }
+      batchStats.merged += grp.length;
+      batchStats.batches++;
+    }
+  }
+
+  // Se llama UNA vez desde game.js cuando ya cargaron items.js y guide.js
+  // (la mayor parte de la decoración — canastas, frascos, utensilios del
+  // estante — la crea items.js, no este archivo).
+  //   · extraDynamic: objetos que esos módulos mueven o iluminan → NO se tocan.
+  //   · mergeInside: grupos que sí deben quedar como objeto (otros módulos los
+  //     iluminan), pero cuyas piezas internas se funden por material.
+  // Se separan dos zonas (cocina al fondo / resto del local) para que el
+  // recorte por cámara siga descartando lo que queda a la espalda.
+  function batchStatic(extraDynamic, mergeInside) {
+    if (batchStats.done || /[?&]nobatch/.test(location.search)) return batchStats;
+    batchStats.done = true;
+    const dynamicRoots = new Set([stoveButtonMesh, fridgeDoorMesh, blenderBladeGroup, entranceDoorL, entranceDoorR,
+      ...(flames || []), ...(fridgeBottles || []), ...(extraDynamic || [])].filter(Boolean));
+    scene.updateMatrixWorld(true);
+    const inDynamic = (o) => { for (let p = o; p; p = p.parent) if (dynamicRoots.has(p)) return true; return false; };
+
+    const groups = new Map();
+    scene.traverse(o => {
+      if (!o.isMesh) return;
+      batchStats.before++;
+      if (!mergeable(o) || inDynamic(o)) return;
+      o.geometry.boundingBox || o.geometry.computeBoundingBox();
+      o.geometry.boundingBox.getCenter(_bbC).applyMatrix4(o.matrixWorld);
+      const key = mergeMatKey(o.material) + '|z' + (_bbC.z < -1.5 ? 0 : 1);
+      if (!groups.has(key)) groups.set(key, []);
+      groups.get(key).push(o);
+    });
+    mergeGroupsOf(groups, new THREE.Matrix4(), scene);
+
+    // Adornos que otros módulos iluminan: se conserva el grupo, se funden sus piezas.
+    for (const root of (mergeInside || [])) {
+      if (!root || !root.parent) continue;
+      root.updateWorldMatrix(true, true);
+      const inner = new Map();
+      root.traverse(o => {
+        if (o === root || !mergeable(o)) return;
+        const k = mergeMatKey(o.material);
+        if (!inner.has(k)) inner.set(k, []);
+        inner.get(k).push(o);
+      });
+      mergeGroupsOf(inner, new THREE.Matrix4().copy(root.matrixWorld).invert(), root);
+    }
+    scene.traverse(o => { if (o.isMesh) batchStats.after++; });
+    return batchStats;
+  }
+
   return {
+    batchStats, batchStatic, IS_MOBILE,
     scene, camera, renderer,
     ZONE, colliders, resolvePlayerXZ,
     ROOM_HALF, WALL_H, BACK_WALL_Z, COUNTER_DEPTH, COUNTER_TOP_Y, PLAYER_EYE, PLAYER_RADIUS, STOVE_CX,

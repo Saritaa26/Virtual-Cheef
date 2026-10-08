@@ -2,8 +2,14 @@
    GAME.JS — Restaurante VR: manos, interacción y bucle principal
    ============================================================
    Responsabilidad de este archivo:
-     - Avatar 3D de las manos rastreadas.
-     - Movimiento del jugador en primera persona (teclado).
+     - Posicionar en el espacio 3D la mano rastreada (el dibujo de la mano
+       vive en handmodel.js).
+     - Movimiento y mirada del jugador en primera persona: teclado, o los
+       sensores del celular (sensors.js: giroscopio + pasos reales). La
+       cámara se actualiza ANTES de calcular manos y objetos agarrados, así
+       todo usa la misma cámara y las manos siguen a la vista sin retraso.
+     - Arranque: permiso de cámara (automático en celular) con mensajes de
+       error claros, y entrada al juego con o sin cámara.
      - Mecánicas de interacción: agarrar/soltar con la pinza,
        abrir puertas, picar, remover, cocinar, descartar, servir,
        y el gesto de GIRAR LA MANO para encender/apagar la estufa.
@@ -28,126 +34,54 @@ const GameState = { stoveOn: false, activeGrab: { left: null, right: null }, fri
 window.Game = GameState;
 
 // ══════════════════════════════════════════════════════════
-// MANOS 3D (avatar de las manos rastreadas)
+// MANOS 3D (avatar orgánico de las manos rastreadas — ver handmodel.js)
 // ══════════════════════════════════════════════════════════
-const FINGER_SEGMENTS = [
-  [1, 2], [2, 3], [3, 4],
-  [5, 6], [6, 7], [7, 8],
-  [9, 10], [10, 11], [11, 12],
-  [13, 14], [14, 15], [15, 16],
-  [17, 18], [18, 19], [19, 20]
-];
-const FINGER_NAMES = ['thumb', 'index', 'middle', 'ring', 'pinky'];
-const FINGER_RADII = {
-  thumb: [0.021, 0.018, 0.015, 0.012],
-  index: [0.018, 0.016, 0.013, 0.010],
-  middle: [0.019, 0.017, 0.014, 0.011],
-  ring: [0.017, 0.015, 0.012, 0.010],
-  pinky: [0.015, 0.013, 0.011, 0.009]
-};
 const HAND_ACCENT = { left: 0x4fc3f7, right: 0xffb74d };
-const SKIN_COLOR = 0xe3a97a;
-const _UP = new THREE.Vector3(0, 1, 0);
-
-function buildHandVisual(handKey) {
-  const root = new THREE.Group();
-  const skinMat = new THREE.MeshStandardMaterial({ color: SKIN_COLOR, roughness: 0.55, emissive: 0x552200, emissiveIntensity: 0 });
-
-  const palm = new THREE.Mesh(new THREE.SphereGeometry(1, 18, 14), skinMat);
-  root.add(palm);
-
-  const wrist = new THREE.Mesh(new THREE.TorusGeometry(0.035, 0.01, 8, 16),
-    new THREE.MeshStandardMaterial({ color: HAND_ACCENT[handKey], roughness: 0.4, metalness: 0.3 }));
-  root.add(wrist);
-
-  const segs = FINGER_SEGMENTS.map(([a, b], i) => {
-    const finger = FINGER_NAMES[Math.floor(i / 3)];
-    const k = i % 3;
-    const radii = FINGER_RADII[finger];
-    const geo = new THREE.CylinderGeometry(radii[k + 1], radii[k], 1, 8);
-    const mesh = new THREE.Mesh(geo, skinMat);
-    root.add(mesh);
-    return { mesh, a, b };
-  });
-
-  const tips = FINGER_NAMES.map(finger => {
-    const mesh = new THREE.Mesh(new THREE.SphereGeometry(FINGER_RADII[finger][3], 8, 8), skinMat);
-    root.add(mesh);
-    return mesh;
-  });
-
-  root.visible = false;
-  scene.add(root);
-  return { root, palm, wrist, skinMat, segs, tips };
-}
-const handVisuals = { left: buildHandVisual('left'), right: buildHandVisual('right') };
+const handModels = {
+  left: HandModel.create('left', HAND_ACCENT.left),
+  right: HandModel.create('right', HAND_ACCENT.right)
+};
+scene.add(handModels.left.root, handModels.right.root);
+const handWorld = {
+  left: Array.from({ length: 21 }, () => new THREE.Vector3()),
+  right: Array.from({ length: 21 }, () => new THREE.Vector3())
+};
 
 // ---------- Mapeo de coordenadas de la mano (0..1 MediaPipe) a espacio 3D ----------
+// La mano vive en un volumen delante de la cámara (espacio de CÁMARA), un poco
+// más grande que el cuadro para poder alcanzar toda la mesa sin salirse de la
+// pantalla. MediaPipe: z más NEGATIVA = más cerca de la cámara (el origen es la
+// muñeca), por eso la profundidad crece con +z.
 const HAND_SPACE = { width: 1.7, height: 1.3, vOffset: -0.12, depthBase: 0.55, depthScale: 1.6 };
-const _localOffset = new THREE.Vector3();
-function handWorldPosition(nx, ny, nz, out) {
-  const depth = clamp(HAND_SPACE.depthBase - nz * HAND_SPACE.depthScale, 0.28, 1.7);
-  _localOffset.set(
+function handLocal(nx, ny, nz, out) {
+  const depth = clamp(HAND_SPACE.depthBase + nz * HAND_SPACE.depthScale, 0.28, 1.7);
+  return out.set(
     (nx - 0.5) * HAND_SPACE.width,
     (0.5 - ny) * HAND_SPACE.height + HAND_SPACE.vOffset,
     -depth
   );
-  out.copy(_localOffset).applyMatrix4(camera.matrixWorld);
-  return out;
+}
+function handWorldPosition(nx, ny, nz, out) {
+  return handLocal(nx, ny, nz, out).applyMatrix4(camera.matrixWorld);
 }
 
-const _tmpA = new THREE.Vector3(), _tmpB = new THREE.Vector3();
-const _pR = new THREE.Vector3(), _pF = new THREE.Vector3(), _pU = new THREE.Vector3();
-const _wristW = new THREE.Vector3(), _idxBaseW = new THREE.Vector3(), _pinkyBaseW = new THREE.Vector3(), _midBaseW = new THREE.Vector3();
-const _basisMat = new THREE.Matrix4();
-
+// Cada cuadro de DIBUJO (no solo cuando llega un resultado de la IA) las manos
+// se reconstruyen a partir de los puntos interpolados (`disp`), con la cámara
+// YA actualizada por el giroscopio/caminar de este cuadro: la mano siempre
+// queda pegada a la vista aunque muevas la cabeza.
 function updateHandVisuals() {
   for (const handKey of ['left', 'right']) {
     const h = HandTracking.hands[handKey];
-    const vis = handVisuals[handKey];
-    vis.root.visible = h.detected;
-    if (!h.detected || !h.landmarks) continue;
-
-    vis.skinMat.emissiveIntensity = h.isPinching ? 0.8 : 0;
-
-    const lm = h.landmarks;
-    handWorldPosition(lm[0].x, lm[0].y, lm[0].z, _wristW);
-    handWorldPosition(lm[5].x, lm[5].y, lm[5].z, _idxBaseW);
-    handWorldPosition(lm[17].x, lm[17].y, lm[17].z, _pinkyBaseW);
-    handWorldPosition(lm[9].x, lm[9].y, lm[9].z, _midBaseW);
-
-    _pR.copy(_idxBaseW).sub(_pinkyBaseW).normalize();
-    _pF.copy(_midBaseW).sub(_wristW).normalize();
-    _pU.crossVectors(_pR, _pF).normalize();
-    _pF.crossVectors(_pU, _pR).normalize();
-    _basisMat.makeBasis(_pR, _pU, _pF);
-    vis.palm.quaternion.setFromRotationMatrix(_basisMat);
-    vis.wrist.quaternion.copy(vis.palm.quaternion);
-
-    handWorldPosition(h.palm.x, h.palm.y, h.palm.z, vis.palm.position);
-    const width = _idxBaseW.distanceTo(_pinkyBaseW) * 1.2 + 0.01;
-    const length = _wristW.distanceTo(_midBaseW) * 1.05 + 0.01;
-    vis.palm.scale.set(width * 0.5, width * 0.28, length * 0.55);
-    vis.wrist.position.copy(_wristW);
-
-    for (const seg of vis.segs) {
-      const a = lm[seg.a], b = lm[seg.b];
-      const pa = handWorldPosition(a.x, a.y, a.z, _tmpA).clone();
-      const pb = handWorldPosition(b.x, b.y, b.z, _tmpB).clone();
-      const mid = pa.clone().add(pb).multiplyScalar(0.5);
-      const dir = pb.clone().sub(pa);
-      const len = dir.length() || 0.001;
-      dir.normalize();
-      seg.mesh.position.copy(mid);
-      seg.mesh.scale.set(1, len, 1);
-      seg.mesh.quaternion.setFromUnitVectors(_UP, dir);
+    const model = handModels[handKey];
+    const show = h.visible && h.disp;
+    model.root.visible = !!show;
+    if (!show) continue;
+    const P = handWorld[handKey];
+    for (let i = 0; i < 21; i++) {
+      const p = h.disp[i];
+      handWorldPosition(p.x, p.y, p.z, P[i]);
     }
-
-    for (let f = 0; f < 5; f++) {
-      const tipIdx = FINGER_SEGMENTS[f * 3 + 2][1];
-      const p = lm[tipIdx];
-      handWorldPosition(p.x, p.y, p.z, vis.tips[f].position);
-    }
+    model.update(P, h.pinch, h.isPinching);
   }
 }
 
@@ -155,6 +89,22 @@ function updateHandVisuals() {
 // INTERACCIÓN: agarrar, soltar, picar, remover, cocinar, servir
 // ══════════════════════════════════════════════════════════
 const activeGrab = GameState.activeGrab;
+
+// El agarre se hace con el PUNTO DE PINZA (entre las yemas del pulgar y el
+// índice), no con el centro de la palma: es donde de verdad sostienes algo, y
+// así el objeto queda entre los dedos del modelo 3D. Un pequeño margen extra
+// al buscar perdona los milímetros que siempre se pierden con una cámara.
+const GRAB_TOLERANCE = 1.2;
+const _tmpPinch = new THREE.Vector3(), _tmpLocal = new THREE.Vector3();
+function pinchWorld(handKey, out) {
+  const p = HandTracking.hands[handKey].dpinch;
+  return handWorldPosition(p.x, p.y, p.z, out);
+}
+// El objeto agarrado se suaviza en coordenadas de CÁMARA (no de mundo): así
+// sigue exactamente el giro de tu cabeza y el avance al caminar, y solo se
+// filtra el temblor de la mano.
+const heldLocal = { left: new THREE.Vector3(), right: new THREE.Vector3() };
+const heldInit = { left: false, right: false };
 
 function allGrabbables() { return [...Items.ingredients, ...Items.vessels, ...Items.plates, ...Items.utensils]; }
 
@@ -167,7 +117,7 @@ function nearestGrabbable(worldPos) {
       if (def && def.needsChop && obj.state === 'raw') continue;
     }
     const d = obj.mesh.position.distanceTo(worldPos);
-    if (d < obj.radius && d < bestD) { bestD = d; best = obj; }
+    if (d < obj.radius * GRAB_TOLERANCE && d < bestD) { bestD = d; best = obj; }
   }
   return best;
 }
@@ -196,6 +146,7 @@ function grabObject(handKey, obj, worldPos) {
   if (obj.onStove !== undefined) obj.onStove = false;
   obj.grabOffset.copy(obj.mesh.position).sub(worldPos);
   activeGrab[handKey] = obj;
+  heldInit[handKey] = false;
 }
 
 // ---------- Estufa: gesto de GIRAR la mano sobre la perilla ----------
@@ -234,7 +185,7 @@ function updateStoveKnob(dt) {
     const eng = knobEngage[handKey];
     if (!h.detected || !h.rollValid) { eng.active = false; eng.accum = 0; continue; }
 
-    const worldPos = handWorldPosition(h.palm.x, h.palm.y, h.palm.z, _tmpKnob);
+    const worldPos = handWorldPosition(h.dpalm.x, h.dpalm.y, h.dpalm.z, _tmpKnob);
     const inZone = worldPos.distanceTo(ZONE.stoveButton.pos) < ZONE.stoveButton.r;
     if (!inZone) { eng.active = false; eng.accum = 0; continue; }
 
@@ -282,7 +233,7 @@ function handleGrabStart(handKey, worldPos) {
   if (worldPos.distanceTo(ZONE.blender.pos) < ZONE.blender.r) { toggleBlender(); return; }
 
   for (const slot of ZONE.pantrySlots) {
-    if (worldPos.distanceTo(slot.pos) < 0.24) {
+    if (worldPos.distanceTo(slot.pos) < 0.24 * GRAB_TOLERANCE) {
       const obj = Items.spawnIngredient(slot.kind, slot.pos.clone());
       grabObject(handKey, obj, worldPos);
       return;
@@ -412,26 +363,30 @@ function handleGrabEnd(handKey, worldPos) {
   else releaseIngredient(obj, worldPos);
 }
 
-function updateHeldObjects() {
+function updateHeldObjects(dt) {
+  const a = 1 - Math.exp(-45 * dt); // seguimiento independiente de los FPS
   for (const handKey of ['left', 'right']) {
     const obj = activeGrab[handKey];
-    if (!obj) continue;
-    const h = HandTracking.hands[handKey];
-    const worldPos = handWorldPosition(h.palm.x, h.palm.y, h.palm.z, _tmpVec2);
-    const target = worldPos.clone().add(obj.grabOffset);
-    obj.mesh.position.lerp(target, 0.5);
+    if (!obj) { heldInit[handKey] = false; continue; }
+    const p = HandTracking.hands[handKey].dpinch;
+    handLocal(p.x, p.y, p.z, _tmpLocal);
+    if (!heldInit[handKey]) { heldLocal[handKey].copy(_tmpLocal); heldInit[handKey] = true; }
+    else heldLocal[handKey].lerp(_tmpLocal, a);
+    _tmpVec2.copy(heldLocal[handKey]).applyMatrix4(camera.matrixWorld);
+    obj.mesh.position.copy(_tmpVec2).add(obj.grabOffset);
   }
 }
 
 const _tmpVec = new THREE.Vector3(), _tmpVec2 = new THREE.Vector3();
-function updateHandGesturesAndInteractions() {
+function updateHandGesturesAndInteractions(dt) {
   for (const handKey of ['left', 'right']) {
     const h = HandTracking.hands[handKey];
-    const worldPos = handWorldPosition(h.palm.x, h.palm.y, h.palm.z, _tmpVec).clone();
+    if (!(h.pinchStarted && !activeGrab[handKey]) && !(h.pinchEnded && activeGrab[handKey])) continue;
+    const worldPos = pinchWorld(handKey, _tmpPinch).clone();
     if (h.pinchStarted && !activeGrab[handKey]) handleGrabStart(handKey, worldPos);
     if (h.pinchEnded && activeGrab[handKey]) handleGrabEnd(handKey, worldPos);
   }
-  updateHeldObjects();
+  updateHeldObjects(dt);
 }
 
 // ---------- Picar ingredientes: requiere sostener el cuchillo ----------
@@ -463,7 +418,7 @@ function updateChopping() {
 
     for (const handKey of ['left', 'right']) {
       const h = HandTracking.hands[handKey];
-      const worldPos = handWorldPosition(h.palm.x, h.palm.y, h.palm.z, _tmpChop);
+      const worldPos = handWorldPosition(h.dpalm.x, h.dpalm.y, h.dpalm.z, _tmpChop);
       if (worldPos.distanceTo(obj.mesh.position) > 0.26) continue;
 
       const spikeEdge = h.chopSpike && !_chopSpikeLatch[handKey];
@@ -497,7 +452,7 @@ function updateStirring() {
     const held = activeGrab[handKey];
     if (held !== Items.spatula && held !== Items.ladle) { _stirLatch[handKey] = false; continue; }
     const h = HandTracking.hands[handKey];
-    const worldPos = handWorldPosition(h.palm.x, h.palm.y, h.palm.z, _tmpStir);
+    const worldPos = handWorldPosition(h.dpalm.x, h.dpalm.y, h.dpalm.z, _tmpStir);
     const nearVessel = findNearbyVessel(worldPos, 0.28);
 
     const spikeEdge = h.chopSpike && !_stirLatch[handKey];
@@ -565,18 +520,29 @@ function showToast(text) {
 GameState.showToast = showToast;
 
 // ---------- HUD de manos ----------
+// Solo se escribe en el DOM cuando el valor CAMBIA: escribir cada cuadro (aunque
+// sea el mismo texto) obliga al navegador a recalcular estilos y, en Modo
+// Cartón, además dispara la copia del HUD a los dos ojos.
 const UTENSIL_LABEL = { knife: 'Cuchillo', spatula: 'Espátula', ladle: 'Cucharón' };
+const hudEls = {
+  pl: document.getElementById('pinch-l'), pr: document.getElementById('pinch-r'),
+  status: document.getElementById('status-text'), held: document.getElementById('held-info')
+};
+const hudLast = { pl: -1, pr: -1, gl: null, gr: null, status: '', held: '' };
 function updateHudHands() {
   const l = HandTracking.hands.left, r = HandTracking.hands.right;
-  const pl = document.getElementById('pinch-l'), pr = document.getElementById('pinch-r');
-  pl.style.width = (l.pinch * 100) + '%'; pl.classList.toggle('grabbing', l.isPinching);
-  pr.style.width = (r.pinch * 100) + '%'; pr.classList.toggle('grabbing', r.isPinching);
+  const pl = Math.round(l.pinch * 20) * 5, pr = Math.round(r.pinch * 20) * 5; // pasos de 5 %
+  if (pl !== hudLast.pl) { hudEls.pl.style.width = pl + '%'; hudLast.pl = pl; }
+  if (pr !== hudLast.pr) { hudEls.pr.style.width = pr + '%'; hudLast.pr = pr; }
+  if (l.isPinching !== hudLast.gl) { hudEls.pl.classList.toggle('grabbing', l.isPinching); hudLast.gl = l.isPinching; }
+  if (r.isPinching !== hudLast.gr) { hudEls.pr.classList.toggle('grabbing', r.isPinching); hudLast.gr = r.isPinching; }
 
   let status;
-  if (!l.detected && !r.detected) status = 'Buscando manos… acércate a la cámara';
-  else if (l.detected && r.detected) status = 'Ambas manos detectadas';
-  else status = l.detected ? 'Mano izquierda detectada' : 'Mano derecha detectada';
-  document.getElementById('status-text').textContent = status;
+  if (!HandTracking.hasCamera) status = 'Sin cámara';
+  else if (!l.detected && !r.detected) status = 'Buscando manos…';
+  else if (l.detected && r.detected) status = 'Ambas manos';
+  else status = l.detected ? 'Mano izquierda' : 'Mano derecha';
+  if (status !== hudLast.status) { hudEls.status.textContent = status; hudLast.status = status; }
 
   const nameOf = (o) => {
     if (!o) return null;
@@ -588,16 +554,19 @@ function updateHudHands() {
     return Items.INGREDIENT_DEF[o.ingredientType].label + extra;
   };
   const l2 = nameOf(activeGrab.left), r2 = nameOf(activeGrab.right);
-  const info = document.getElementById('held-info');
-  info.innerHTML = (!l2 && !r2) ? 'Manos vacías' :
+  const held = (!l2 && !r2) ? 'Manos vacías' :
     [l2 ? `Izq: <b>${l2}</b>` : '', r2 ? `Der: <b>${r2}</b>` : ''].filter(Boolean).join(' · ');
+  if (held !== hudLast.held) { hudEls.held.innerHTML = held; hudLast.held = held; }
 }
 
 // ══════════════════════════════════════════════════════════
-// JUGADOR: movimiento en primera persona (teclado)
+// JUGADOR: movimiento en primera persona (teclado + sensores del celular)
 // ══════════════════════════════════════════════════════════
 const K = {};
-window.addEventListener('keydown', e => { K[e.code] = true; });
+window.addEventListener('keydown', e => {
+  K[e.code] = true;
+  if (e.code === 'KeyR') Sensors.recenter();
+});
 window.addEventListener('keyup', e => { K[e.code] = false; });
 
 const player = { pos: new THREE.Vector3(0, PLAYER_EYE, 3.5), yaw: 0, pitch: 0 };
@@ -608,7 +577,11 @@ const MOVE_SPEED = 2.2, TURN_SPEED = 1.6, LOOK_SPEED = 1.2;
 const CROUCH_EYE = PLAYER_EYE - 0.62;
 const CROUCH_SPEED_MULT = 0.55;
 let eyeHeight = PLAYER_EYE;
+const _camQ = new THREE.Quaternion(), _lookV = new THREE.Vector3();
 
+// Orden dentro del cuadro (importa): 1) orientación (giroscopio o teclado),
+// 2) avance (teclado o pasos reales), 3) matriz de la cámara. Recién después
+// se calculan manos, objetos agarrados y se dibuja — todos con LA MISMA cámara.
 function updatePlayerMovement(dt) {
   if (K['ArrowLeft']) player.yaw += TURN_SPEED * dt;
   if (K['ArrowRight']) player.yaw -= TURN_SPEED * dt;
@@ -619,7 +592,15 @@ function updatePlayerMovement(dt) {
   eyeHeight = lerp(eyeHeight, crouching ? CROUCH_EYE : PLAYER_EYE, Math.min(1, dt * 6));
   const moveSpeed = MOVE_SPEED * (crouching ? CROUCH_SPEED_MULT : 1);
 
-  const sinY = Math.sin(player.yaw), cosY = Math.cos(player.yaw);
+  // Con sensores, la cámara mira donde miras en la vida real y "adelante"
+  // (WASD y pasos) es hacia donde apunta la vista, no el yaw del teclado.
+  const gyro = Sensors.orientationInto(_camQ, player.yaw, dt);
+  let heading = player.yaw;
+  if (gyro) {
+    _lookV.set(0, 0, -1).applyQuaternion(_camQ);
+    if (Math.hypot(_lookV.x, _lookV.z) > 0.25) heading = Math.atan2(-_lookV.x, -_lookV.z);
+  }
+  const sinY = Math.sin(heading), cosY = Math.cos(heading);
   const fwd = { x: -sinY, z: -cosY };
   const right = { x: cosY, z: -sinY };
 
@@ -629,17 +610,21 @@ function updatePlayerMovement(dt) {
   if (K['KeyD']) { mx += right.x; mz += right.z; }
   if (K['KeyA']) { mx -= right.x; mz -= right.z; }
 
+  let dx = 0, dz = 0;
   const len = Math.hypot(mx, mz);
-  if (len > 0.0001) {
-    mx /= len; mz /= len;
-    const resolved = resolvePlayerXZ(player.pos.x + mx * moveSpeed * dt, player.pos.z + mz * moveSpeed * dt);
+  if (len > 0.0001) { dx = (mx / len) * moveSpeed * dt; dz = (mz / len) * moveSpeed * dt; }
+  const walk = Sensors.consumeWalk(dt) * (crouching ? CROUCH_SPEED_MULT : 1); // pasos reales, repartidos en el tiempo
+  if (walk > 0) { dx += fwd.x * walk; dz += fwd.z * walk; }
+  if (dx !== 0 || dz !== 0) {
+    const resolved = resolvePlayerXZ(player.pos.x + dx, player.pos.z + dz);
     player.pos.x = resolved.x;
     player.pos.z = resolved.z;
   }
 
   player.pos.y = eyeHeight;
   camera.position.copy(player.pos);
-  camera.rotation.set(player.pitch, player.yaw, 0, 'YXZ');
+  if (gyro) camera.quaternion.copy(_camQ);
+  else camera.rotation.set(player.pitch, player.yaw, 0, 'YXZ');
   camera.updateMatrixWorld(true);
 }
 
@@ -650,12 +635,15 @@ let lastT = performance.now();
 function loop() {
   requestAnimationFrame(loop);
   const now = performance.now();
-  const dt = Math.min((now - lastT) / 1000, 0.05);
+  const rawDt = (now - lastT) / 1000;
+  const dt = Math.min(rawDt, 0.05);
   lastT = now;
   clockT += dt;
 
+  Perf.update(rawDt);
+  HandTracking.tick(dt);
   updatePlayerMovement(dt);
-  updateHandGesturesAndInteractions();
+  updateHandGesturesAndInteractions(dt);
   updateStoveKnob(dt);
   updateHandVisuals();
   updateChopping();
@@ -672,28 +660,90 @@ function loop() {
   renderer.render(scene, camera);
 }
 
+// Fusiona la geometría estática (menos llamadas de dibujo por cuadro). Se hace
+// UNA vez, ya con items.js cargado: lo que ese módulo mueve o ilumina queda fuera.
+(function batchStaticWorld() {
+  const dyn = [];
+  for (const list of [Items.ingredients, Items.plates, Items.pans, Items.pots, Items.utensils]) {
+    for (const o of list) if (o && o.mesh) dyn.push(o.mesh);
+  }
+  const markers = Object.values(Items.pantryMarkers).filter(o => o && o.mesh).map(o => o.mesh);
+  World.batchStatic(dyn.concat(markers), markers);
+})();
+
 // ══════════════════════════════════════════════════════════
-// ARRANQUE: pantalla de inicio -> permiso de cámara -> juego
+// ARRANQUE: permiso de cámara (automático en celular) -> juego
 // ══════════════════════════════════════════════════════════
 const startBtn = document.getElementById('start-btn');
 const startStatus = document.getElementById('start-status');
+const camStatus = document.getElementById('camera-status');
+const retryBtn = document.getElementById('retry-camera-btn');
+const noCamBtn = document.getElementById('nocam-btn');
+let gameStarted = false;
 
-startBtn.addEventListener('click', async () => {
-  startBtn.disabled = true;
-  startStatus.textContent = 'Solicitando acceso a la cámara…';
-  try {
-    await HandTracking.start();
-    document.getElementById('start-screen').classList.add('hidden');
-    document.getElementById('hud').classList.remove('hidden');
-    Guide.startFirstOrder();
-    lastT = performance.now();
-    requestAnimationFrame(loop);
-  } catch (err) {
-    startStatus.textContent = 'No se pudo acceder a la cámara: ' + (err && err.message ? err.message : err);
-    startBtn.disabled = false;
+function setCamStatus(kind, text) {
+  camStatus.className = kind;       // info | ok | error
+  camStatus.textContent = text;
+}
+
+// Refleja en la pantalla de inicio cada etapa del acceso a la cámara. Si algo
+// falla, el mensaje dice POR QUÉ y se ofrece reintentar o entrar sin cámara.
+HandTracking.onState((state, err) => {
+  const failed = state === 'error';
+  retryBtn.classList.toggle('hidden', !failed);
+  noCamBtn.classList.toggle('hidden', !failed);
+  switch (state) {
+    case 'requesting':   setCamStatus('info', '📷 Solicitando permiso de la cámara trasera… acéptalo en el aviso del navegador.'); break;
+    case 'loading':      setCamStatus('info', '🧠 Cámara lista. Cargando el reconocimiento de manos…'); break;
+    case 'camera-ready': setCamStatus('ok', '✅ Cámara trasera lista.'); break;
+    case 'running':      setCamStatus('ok', '✅ Cámara y reconocimiento de manos activos.'); break;
+    case 'error':        setCamStatus('error', '⚠ ' + (err && err.userMessage ? err.userMessage : 'No se pudo usar la cámara.')); break;
   }
 });
 
+function enterGame() {
+  if (gameStarted) return;
+  gameStarted = true;
+  document.getElementById('start-screen').classList.add('hidden');
+  document.getElementById('hud').classList.remove('hidden');
+  Guide.startFirstOrder();
+  lastT = performance.now();
+  requestAnimationFrame(loop);
+  if (!HandTracking.hasCamera) {
+    showToast('📷 Sin cámara: puedes recorrer la cocina, pero las manos no estarán activas.');
+  }
+  // En celular, si a los pocos segundos no llegó ningún dato de movimiento, avisar por qué.
+  if (World.IS_MOBILE) {
+    setTimeout(() => {
+      if (!Sensors.active) showToast('🧭 Sin sensores de movimiento: abre la página por https:// y permite «Movimiento y orientación».');
+    }, 2500);
+  }
+}
+
+async function startWithHands() {
+  // iOS exige pedir el permiso de movimiento DENTRO del toque del usuario, así
+  // que se lanza aquí, antes de cualquier `await`. En Android no hace nada.
+  const motionAsk = Sensors.enable();
+  startBtn.disabled = true;
+  startStatus.textContent = '';
+  try {
+    await HandTracking.start();
+    enterGame();
+  } catch (_) {
+    startBtn.disabled = false;   // el motivo ya se muestra en #camera-status
+  }
+  motionAsk.then(ok => { if (!ok && gameStarted) showToast('🧭 Permiso de movimiento denegado: el giro de cabeza y caminar no funcionarán.'); });
+}
+
+startBtn.addEventListener('click', startWithHands);
+retryBtn.addEventListener('click', startWithHands);
+noCamBtn.addEventListener('click', () => { Sensors.enable(); enterGame(); });
+
+// En celular el permiso se pide solo al abrir la página (sin esperar el botón),
+// y el modelo de manos se va cargando mientras se lee la pantalla de inicio.
+if (World.IS_MOBILE) HandTracking.prepare().catch(() => { /* el estado de error ya se muestra */ });
+
 document.getElementById('restart-btn').addEventListener('click', () => location.reload());
+document.getElementById('recenter-btn').addEventListener('click', () => { Sensors.recenter(); showToast('🧭 Vista recentrada.'); });
 
 })();

@@ -12,11 +12,9 @@
 <!-- ============================================================
      LIBRERÍAS EXTERNAS (CDN) — no requieren instalación local
      - MediaPipe Hands: detección de manos y dedos en tiempo real
-     - MediaPipe Camera Utils: helper para alimentar frames de la webcam
      - Three.js (build clásico UMD): motor 3D, expone el global THREE
      ============================================================ -->
 <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands@0.4/hands.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils@0.3/camera_utils.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.min.js"></script>
 </head>
 <body>
@@ -50,10 +48,16 @@
       <li><b>W A S D</b> — Caminar &nbsp; <b>← →</b> Girar &nbsp; <b>↑ ↓</b> Mirar arriba/abajo &nbsp; <b>C</b> Agacharse</li>
       <li><b>🙇 Agáchate (mantén C)</b> — Baja la cámara para alcanzar ingredientes o platos que se cayeron al piso</li>
       <li><b>🥽 Modo Cartón</b> — Divide la pantalla en dos para tus gafas de cartón/plástico; mira alrededor moviendo la cabeza</li>
-      <li><b>🚶 Camina de verdad</b> (con el celular puesto) — te avanza en la dirección a la que estás mirando; gira la cabeza para cambiar de dirección</li>
+      <li><b>🧭 Mueve el celular</b> — la vista gira igual que tú: izquierda, derecha, arriba, abajo e inclinación (funciona con o sin gafas)</li>
+      <li><b>🚶 Camina de verdad</b> — cada paso real te avanza hacia donde miras; gira para cambiar de dirección. <b>R</b> o «↺ Recentrar» fija el frente</li>
     </ul>
 
+    <div id="camera-status" class="info" role="status" aria-live="polite">📷 La cámara trasera se pedirá al abrir la página (en celular) o al pulsar «Entrar» (en PC).</div>
     <button id="start-btn">▶ Entrar a la cocina</button>
+    <div id="camera-actions">
+      <button id="retry-camera-btn" class="secondary hidden">⟳ Reintentar cámara</button>
+      <button id="nocam-btn" class="secondary hidden">Entrar sin cámara</button>
+    </div>
     <div id="start-status"></div>
     <p class="hint">Se solicitará permiso de cámara. Ubícate en un lugar con buena luz y muestra ambas manos frente a la webcam para mejores resultados.</p>
   </div>
@@ -70,6 +74,7 @@
     <div id="score-box">🪙 <span id="score">0</span></div>
     <div id="hand-status">
       <span id="status-text">Iniciando cámara…</span>
+      <span id="fps-text">FPS —</span>
       <div class="hand-row">
         <span class="hand-label">Izq</span>
         <div class="pinch-bar"><div id="pinch-l" class="pinch-fill"></div></div>
@@ -97,6 +102,7 @@
 
   <div id="toast-wrap"></div>
 
+  <button id="recenter-btn" title="Fija como frente la dirección en la que estás mirando ahora">↺ Recentrar</button>
   <button id="invert-gyro-btn" title="Si en el Modo Cartón la vista gira al revés de tu cabeza, toca aquí">↔ Invertir giro de cabeza</button>
   <div id="controls-hint">WASD mover · ←→ girar · ↑↓ mirar · C agacharse · pinza = agarrar</div>
 </div>
@@ -117,18 +123,22 @@
 <!-- ============================================================
      LÓGICA DEL PROYECTO — se cargan en este orden porque cada
      módulo consume el `window.X` que publica el anterior:
-     tracking.js  → cámara + MediaPipe Hands + gestos (HandTracking)
+     tracking.js  → permiso de cámara trasera + MediaPipe Hands + gestos
+                    filtrados y estables (HandTracking)
      world.js     → escena 3D, cocina, zonas de interacción (World)
+     perf.js      → calidad adaptativa para sostener ~60 FPS (Perf)
+     sensors.js   → giroscopio (mirar) + acelerómetro (caminar) (Sensors)
+     handmodel.js → mano 3D orgánica sobre los 21 puntos (HandModel)
      items.js     → ingredientes/utensilios/platos/sartenes (Items)
      game.js      → manos, interacción y bucle principal (Game)
      guide.js     → pedidos, resaltado y tutorial paso a paso (Guide)
-     cardboard.js → Modo Cartón: render estéreo + mirar con la
-                    cabeza (giroscopio). Es 100% aditivo: solo LEE
-                    World.camera/World.renderer y Game.showToast,
-                    no modifica ninguno de los archivos anteriores.
+     cardboard.js → Modo Cartón: render estéreo + HUD en cada ojo
      ============================================================ -->
 <script src="tracking.js"></script>
 <script src="world.js"></script>
+<script src="perf.js"></script>
+<script src="sensors.js"></script>
+<script src="handmodel.js"></script>
 <script src="items.js"></script>
 <script src="game.js"></script>
 <script src="guide.js"></script>

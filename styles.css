@@ -65,11 +65,13 @@ html,body{
    ============================================================ */
 #start-screen{
   position:fixed;inset:0;z-index:100;
-  display:flex;align-items:center;justify-content:center;
+  display:flex;
+  overflow-y:auto;               /* si el panel es más alto que la pantalla (celular), se desplaza */
   background:radial-gradient(ellipse at center, #0F2530 0%, #071118 100%);
   padding:20px;
 }
 #start-screen .panel{
+  margin:auto;                   /* centra cuando cabe y se alinea arriba cuando no (sin recortar el título) */
   max-width:480px;width:100%;
   background:var(--panel-bg);
   border:1px solid var(--panel-border);
@@ -135,6 +137,22 @@ html,body{
 
 .hint{margin-top:14px;font-size:11.5px;color:var(--muted);line-height:1.5;}
 #start-status{margin-top:10px;font-size:12.5px;color:var(--danger);min-height:16px;}
+/* Estado del permiso de cámara (se actualiza solo: solicitando / lista / error) */
+#camera-status{
+  margin:0 0 14px;padding:9px 12px;border-radius:10px;
+  font-size:12.5px;line-height:1.45;text-align:left;
+  border:1px solid rgba(255,255,255,.1);background:rgba(255,255,255,.04);color:var(--muted);
+}
+#camera-status.ok{border-color:rgba(63,216,196,.45);color:var(--accent2);background:rgba(63,216,196,.08);}
+#camera-status.error{border-color:rgba(225,88,75,.55);color:#ffb4ab;background:rgba(225,88,75,.1);}
+#camera-actions{display:flex;gap:8px;justify-content:center;flex-wrap:wrap;margin-top:12px;}
+button.secondary{
+  font-family:var(--font-body);font-size:13px;font-weight:600;
+  background:rgba(255,255,255,.06);border:1px solid var(--panel-border);color:var(--ink);
+  padding:9px 16px;border-radius:20px;cursor:pointer;
+}
+button.secondary:hover{border-color:var(--accent);}
+
 
 /* ============================================================
    HUD EN JUEGO
@@ -167,7 +185,8 @@ html,body{
   letter-spacing:.2px;
   color:var(--muted);
 }
-#status-text{display:block;margin-bottom:6px;color:var(--ink);}
+#status-text{display:block;margin-bottom:2px;color:var(--ink);}
+#fps-text{display:block;margin-bottom:4px;color:var(--muted);font-size:.92em;}
 .hand-row{display:flex;align-items:center;gap:6px;margin-top:4px;}
 .hand-label{width:26px;font-weight:600;color:var(--ink);}
 .pinch-bar{flex:1;height:8px;border-radius:5px;background:rgba(255,255,255,.1);overflow:hidden;}
@@ -296,8 +315,8 @@ html,body{
    El signo correcto de esta compensación varía según el celular/navegador
    y no se puede adivinar sin probarlo en el dispositivo real — este botón
    deja que el usuario lo invierta él mismo con un toque (ver cardboard.js). */
-#invert-gyro-btn{
-  position:absolute;bottom:50px;left:50%;transform:translateX(-50%);
+#invert-gyro-btn,#recenter-btn{
+  position:absolute;bottom:50px;left:50%;
   pointer-events:auto;
   background:var(--panel-bg);
   border:1px solid var(--panel-border);
@@ -308,7 +327,9 @@ html,body{
   cursor:pointer;
   white-space:nowrap;
 }
-#invert-gyro-btn:hover{color:var(--ink);border-color:var(--accent);}
+#invert-gyro-btn{transform:translateX(calc(-100% - 4px));}
+#recenter-btn{transform:translateX(4px);}
+#invert-gyro-btn:hover,#recenter-btn:hover{color:var(--ink);border-color:var(--accent);}
 
 /* ============================================================
    MODO CARTÓN (gafas de plástico/cartón + celular)
@@ -393,7 +414,9 @@ body.cardboard-on .cardboard-hud{display:flex;}
 @media (max-width:640px){
   #order-ticket{width:170px;font-size:11px;}
   #hand-status{min-width:150px;}
-  #tutorial-panel{top:96px;font-size:12px;padding:8px 14px;}
+  /* El pedido (hasta 4 ingredientes) es alto y el panel de tutorial, centrado arriba,
+     lo pisaba: en pantallas angostas el tutorial va ABAJO, encima de los botones. */
+  #tutorial-panel{top:auto;bottom:88px;font-size:12px;padding:8px 14px;}
   #tutorial-icon{font-size:16px;}
   /* Reiniciar/Modo Cartón estaban centrados lado a lado — con el
      panel de manos angosto de PC nunca chocaba, pero en celular el
@@ -408,7 +431,7 @@ body.cardboard-on .cardboard-hud{display:flex;}
   /* Se queda en su propia fila (bottom:50, heredado) en vez de bajar
      a bottom:16 — ahí abajo ya compiten stove-indicator/held-info por
      el mismo ancho y en celular angosto sí llegan a chocar. */
-  #invert-gyro-btn{font-size:10px;padding:5px 10px;}
+  #invert-gyro-btn,#recenter-btn{font-size:10px;padding:5px 10px;}
 }
 
 /* Celular angosto en vertical: aquí es donde el diseño de PC se
@@ -422,7 +445,7 @@ body.cardboard-on .cardboard-hud{display:flex;}
   #order-ticket h3{font-size:10px;}
   #order-name{font-size:11px;}
   #order-items{font-size:9.5px;}
-  #tutorial-panel{top:116px;font-size:10.5px;padding:6px 10px;max-width:94vw;}
+  #tutorial-panel{top:auto;bottom:88px;font-size:10.5px;padding:6px 10px;max-width:94vw;}
   #tutorial-icon{font-size:14px;}
   #stove-indicator{font-size:10.5px;padding:5px 9px;}
   #held-info{font-size:9.5px;min-width:104px;padding:5px 9px;}
@@ -456,3 +479,10 @@ body.cardboard-on .cardboard-hud{display:flex;}
 #stove-indicator{ bottom:max(16px, env(safe-area-inset-bottom)); left:max(14px, env(safe-area-inset-left)); }
 #held-info{ bottom:max(16px, env(safe-area-inset-bottom)); right:max(14px, env(safe-area-inset-right)); }
 #toast-wrap{ bottom:max(110px, calc(96px + env(safe-area-inset-bottom))); }
+
+/* Con el tutorial abajo, los avisos emergentes (toasts) suben encima de él. */
+@media (max-width:640px){
+  #toast-wrap{ bottom:max(142px, calc(128px + env(safe-area-inset-bottom))); width:92vw; }
+  /* Los avisos largos se cortaban por los lados: en pantallas angostas pueden partirse en líneas. */
+  .toast{ white-space:normal; text-align:center; max-width:100%; }
+}
