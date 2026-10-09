@@ -2,8 +2,9 @@
    GAME.JS — Restaurante VR: manos, interacción y bucle principal
    ============================================================
    Responsabilidad de este archivo:
-     - Posicionar en el espacio 3D la mano rastreada (el dibujo de la mano
-       vive en handmodel.js).
+     - Convertir cada mano rastreada en dos punteros (pinza y palma) que se
+       proyectan como rayos desde la cámara. El dibujo 2D de la mano vive en
+       handoverlay.js.
      - Movimiento y mirada del jugador en primera persona: teclado, o los
        sensores del celular (sensors.js: giroscopio + pasos reales). La
        cámara se actualiza ANTES de calcular manos y objetos agarrados, así
@@ -34,92 +35,77 @@ const GameState = { stoveOn: false, activeGrab: { left: null, right: null }, fri
 window.Game = GameState;
 
 // ══════════════════════════════════════════════════════════
-// MANOS 3D (avatar orgánico de las manos rastreadas — ver handmodel.js)
+// PUNTEROS: cada mano es un puntero 2D sobre la pantalla (ver handoverlay.js)
 // ══════════════════════════════════════════════════════════
-const HAND_ACCENT = { left: 0x4fc3f7, right: 0xffb74d };
-const handModels = {
-  left: HandModel.create('left', HAND_ACCENT.left),
-  right: HandModel.create('right', HAND_ACCENT.right)
-};
-scene.add(handModels.left.root, handModels.right.root);
-const handWorld = {
-  left: Array.from({ length: 21 }, () => new THREE.Vector3()),
-  right: Array.from({ length: 21 }, () => new THREE.Vector3())
-};
+// Antes cada punto de la mano se colocaba en 3D usando la "profundidad" (z) que
+// estima MediaPipe, que es MUY ruidosa: por eso la mano se deformaba con el más
+// mínimo movimiento. Ahora la mano se dibuja en 2D y lo que cuenta para jugar es
+// un RAYO desde la cámara que atraviesa la pantalla justo por donde está la mano:
+//   · rayo de PINZA  (punto entre las yemas del pulgar e índice) → agarrar/soltar.
+//   · rayo de PALMA  (centro de la palma)                         → perilla, picar, remover.
+// Lo que ves bajo el puntero es lo que agarras, a cualquier distancia, y no hay
+// ningún dato de profundidad que pueda "temblar".
+function makeRay() { return { o: new THREE.Vector3(), d: new THREE.Vector3(), valid: false }; }
+const handRays = { left: { pinch: makeRay(), palm: makeRay() }, right: { pinch: makeRay(), palm: makeRay() } };
+const REACH_MIN = 0.15, REACH_MAX = 2.6;   // metros a lo largo del rayo en que se puede agarrar algo
 
-// ---------- Mapeo de coordenadas de la mano (0..1 MediaPipe) a espacio 3D ----------
-// La mano vive en un volumen delante de la cámara (espacio de CÁMARA), un poco
-// más grande que el cuadro para poder alcanzar toda la mesa sin salirse de la
-// pantalla. MediaPipe: z más NEGATIVA = más cerca de la cámara (el origen es la
-// muñeca), por eso la profundidad crece con +z.
-const HAND_SPACE = { width: 1.7, height: 1.3, vOffset: -0.12, depthBase: 0.55, depthScale: 1.6 };
-function handLocal(nx, ny, nz, out) {
-  const depth = clamp(HAND_SPACE.depthBase + nz * HAND_SPACE.depthScale, 0.28, 1.7);
-  return out.set(
-    (nx - 0.5) * HAND_SPACE.width,
-    (0.5 - ny) * HAND_SPACE.height + HAND_SPACE.vOffset,
-    -depth
-  );
+function setRay(r, ndcX, ndcY, aspect) {
+  const tanH = Math.tan(THREE.MathUtils.degToRad(camera.fov * 0.5));
+  r.o.copy(camera.position);
+  r.d.set(ndcX * tanH * aspect, ndcY * tanH, -1).transformDirection(camera.matrixWorld);
+  r.valid = true;
 }
-function handWorldPosition(nx, ny, nz, out) {
-  return handLocal(nx, ny, nz, out).applyMatrix4(camera.matrixWorld);
-}
-
-// Cada cuadro de DIBUJO (no solo cuando llega un resultado de la IA) las manos
-// se reconstruyen a partir de los puntos interpolados (`disp`), con la cámara
-// YA actualizada por el giroscopio/caminar de este cuadro: la mano siempre
-// queda pegada a la vista aunque muevas la cabeza.
-function updateHandVisuals() {
+function updateHandRays() {
+  const view = HandOverlay.view;
   for (const handKey of ['left', 'right']) {
-    const h = HandTracking.hands[handKey];
-    const model = handModels[handKey];
-    const show = h.visible && h.disp;
-    model.root.visible = !!show;
-    if (!show) continue;
-    const P = handWorld[handKey];
-    for (let i = 0; i < 21; i++) {
-      const p = h.disp[i];
-      handWorldPosition(p.x, p.y, p.z, P[i]);
-    }
-    model.update(P, h.pinch, h.isPinching);
+    const st = HandOverlay.state[handKey];
+    const rays = handRays[handKey];
+    if (!st.visible) { rays.pinch.valid = false; rays.palm.valid = false; continue; }
+    setRay(rays.pinch, st.pinchNdc.x, st.pinchNdc.y, view.aspect);
+    setRay(rays.palm, st.palmNdc.x, st.palmNdc.y, view.aspect);
   }
 }
+
+// Distancia a lo largo del rayo hasta `pos` si queda a menos de `radius` del rayo
+// (y dentro del alcance); -1 si no. Es el "¿lo estoy tocando?" de todo el juego.
+const _rv = new THREE.Vector3(), _wp = new THREE.Vector3();
+function rayHit(r, pos, radius) {
+  if (!r.valid) return -1;
+  _rv.copy(pos).sub(r.o);
+  const t = _rv.dot(r.d);
+  if (t < REACH_MIN || t > REACH_MAX) return -1;
+  return (_rv.lengthSq() - t * t) < radius * radius ? t : -1;
+}
+function rayPoint(r, t, out) { return out.copy(r.d).multiplyScalar(t).add(r.o); }
 
 // ══════════════════════════════════════════════════════════
 // INTERACCIÓN: agarrar, soltar, picar, remover, cocinar, servir
 // ══════════════════════════════════════════════════════════
 const activeGrab = GameState.activeGrab;
 
-// El agarre se hace con el PUNTO DE PINZA (entre las yemas del pulgar y el
-// índice), no con el centro de la palma: es donde de verdad sostienes algo, y
-// así el objeto queda entre los dedos del modelo 3D. Un pequeño margen extra
-// al buscar perdona los milímetros que siempre se pierden con una cámara.
-const GRAB_TOLERANCE = 1.2;
-const _tmpPinch = new THREE.Vector3(), _tmpLocal = new THREE.Vector3();
-function pinchWorld(handKey, out) {
-  const p = HandTracking.hands[handKey].dpinch;
-  return handWorldPosition(p.x, p.y, p.z, out);
-}
-// El objeto agarrado se suaviza en coordenadas de CÁMARA (no de mundo): así
-// sigue exactamente el giro de tu cabeza y el avance al caminar, y solo se
-// filtra el temblor de la mano.
-const heldLocal = { left: new THREE.Vector3(), right: new THREE.Vector3() };
-const heldInit = { left: false, right: false };
+// Un pequeño margen extra al buscar perdona los píxeles que siempre se pierden
+// con una cámara y hace más fácil acertar a objetos pequeños.
+const GRAB_TOLERANCE = 1.25;
+const _tmpPinch = new THREE.Vector3(), _qInv = new THREE.Quaternion();
+
+// El objeto agarrado conserva la distancia (a lo largo del rayo) a la que lo
+// tomaste, y su desfase respecto al puntero se guarda en coordenadas de CÁMARA:
+// así sigue exactamente el giro de tu cabeza y el avance al caminar.
+const heldDepth = { left: 2, right: 2 };
+const heldOffsetLocal = { left: new THREE.Vector3(), right: new THREE.Vector3() };
+// Cada pinza/suelta se atiende UNA sola vez (la bandera `pinchStarted` de la IA
+// puede verse en varios cuadros de dibujo seguidos).
+const seenStart = { left: 0, right: 0 }, seenEnd = { left: 0, right: 0 };
 
 function allGrabbables() { return [...Items.ingredients, ...Items.vessels, ...Items.plates, ...Items.utensils]; }
 
-function nearestGrabbable(worldPos) {
-  let best = null, bestD = Infinity;
-  for (const obj of allGrabbables()) {
-    if (obj.heldBy) continue;
-    if (obj.onBoard) {
-      const def = obj.ingredientType && Items.INGREDIENT_DEF[obj.ingredientType];
-      if (def && def.needsChop && obj.state === 'raw') continue;
-    }
-    const d = obj.mesh.position.distanceTo(worldPos);
-    if (d < obj.radius * GRAB_TOLERANCE && d < bestD) { bestD = d; best = obj; }
+function isGrabbable(obj) {
+  if (obj.heldBy) return false;
+  if (obj.onBoard) {
+    const def = obj.ingredientType && Items.INGREDIENT_DEF[obj.ingredientType];
+    if (def && def.needsChop && obj.state === 'raw') return false;
   }
-  return best;
+  return true;
 }
 
 function detachFromVessel(obj) {
@@ -139,14 +125,17 @@ function detachFromVessel(obj) {
   obj.inPan = false;
 }
 
-function grabObject(handKey, obj, worldPos) {
+// `t`: distancia a lo largo del rayo de pinza a la que está el objeto.
+function grabObject(handKey, obj, t) {
   detachFromVessel(obj);
   obj.heldBy = handKey;
   obj.onBoard = false;
   if (obj.onStove !== undefined) obj.onStove = false;
-  obj.grabOffset.copy(obj.mesh.position).sub(worldPos);
+  rayPoint(handRays[handKey].pinch, t, _tmpPinch);
+  obj.grabOffset.copy(obj.mesh.position).sub(_tmpPinch);
+  heldOffsetLocal[handKey].copy(obj.grabOffset).applyQuaternion(_qInv.copy(camera.quaternion).invert());
+  heldDepth[handKey] = t;
   activeGrab[handKey] = obj;
-  heldInit[handKey] = false;
 }
 
 // ---------- Estufa: gesto de GIRAR la mano sobre la perilla ----------
@@ -165,7 +154,6 @@ const STOVE_TOGGLE_COOLDOWN = 700; // ms
 const STOVE_TURN_SIGN = -1;
 const knobEngage = { left: { active: false, accum: 0, lastAngle: 0 }, right: { active: false, accum: 0, lastAngle: 0 } };
 let lastStoveToggleAt = 0;
-const _tmpKnob = new THREE.Vector3();
 
 function setStove(on) {
   if (GameState.stoveOn === on) return;
@@ -185,8 +173,7 @@ function updateStoveKnob(dt) {
     const eng = knobEngage[handKey];
     if (!h.detected || !h.rollValid) { eng.active = false; eng.accum = 0; continue; }
 
-    const worldPos = handWorldPosition(h.dpalm.x, h.dpalm.y, h.dpalm.z, _tmpKnob);
-    const inZone = worldPos.distanceTo(ZONE.stoveButton.pos) < ZONE.stoveButton.r;
+    const inZone = rayHit(handRays[handKey].palm, ZONE.stoveButton.pos, ZONE.stoveButton.r * GRAB_TOLERANCE) > 0;
     if (!inZone) { eng.active = false; eng.accum = 0; continue; }
 
     if (!eng.active) {
@@ -226,27 +213,30 @@ function toggleBlender() {
   showToast(GameState.blenderOn ? '🥤 Licuadora encendida' : '🥤 Licuadora apagada');
 }
 
-function handleGrabStart(handKey, worldPos) {
+function handleGrabStart(handKey) {
   // La perilla de la estufa YA NO se activa por pinza: se gira (ver updateStoveKnob).
-  if (worldPos.distanceTo(ZONE.fridgeHandle.pos) < ZONE.fridgeHandle.r) { toggleFridge(); return; }
-  if (worldPos.distanceTo(ZONE.entranceHandle.pos) < ZONE.entranceHandle.r) { toggleEntranceDoor(); return; }
-  if (worldPos.distanceTo(ZONE.blender.pos) < ZONE.blender.r) { toggleBlender(); return; }
+  const r = handRays[handKey].pinch;
+  let best = null;   // lo más cercano a la cámara que el puntero toca (como un objeto que tapa a otro)
+  const consider = (t, act) => { if (t > 0 && (!best || t < best.t)) best = { t, act }; };
+
+  consider(rayHit(r, ZONE.fridgeHandle.pos, ZONE.fridgeHandle.r * GRAB_TOLERANCE), () => toggleFridge());
+  consider(rayHit(r, ZONE.entranceHandle.pos, ZONE.entranceHandle.r * GRAB_TOLERANCE), () => toggleEntranceDoor());
+  consider(rayHit(r, ZONE.blender.pos, ZONE.blender.r * GRAB_TOLERANCE), () => toggleBlender());
 
   for (const slot of ZONE.pantrySlots) {
-    if (worldPos.distanceTo(slot.pos) < 0.24 * GRAB_TOLERANCE) {
-      const obj = Items.spawnIngredient(slot.kind, slot.pos.clone());
-      grabObject(handKey, obj, worldPos);
-      return;
-    }
+    const t = rayHit(r, slot.pos, 0.24 * GRAB_TOLERANCE);
+    consider(t, () => grabObject(handKey, Items.spawnIngredient(slot.kind, slot.pos.clone()), t));
   }
-  if (worldPos.distanceTo(ZONE.plateStack.pos) < ZONE.plateStack.r) {
-    const obj = Items.spawnPlate(ZONE.plateStack.pos.clone());
-    grabObject(handKey, obj, worldPos);
-    return;
-  }
+  const tp = rayHit(r, ZONE.plateStack.pos, ZONE.plateStack.r * GRAB_TOLERANCE);
+  consider(tp, () => grabObject(handKey, Items.spawnPlate(ZONE.plateStack.pos.clone()), tp));
 
-  const obj = nearestGrabbable(worldPos);
-  if (obj) grabObject(handKey, obj, worldPos);
+  for (const obj of allGrabbables()) {
+    if (!isGrabbable(obj)) continue;
+    obj.mesh.getWorldPosition(_wp);
+    const t = rayHit(r, _wp, obj.radius * GRAB_TOLERANCE);
+    consider(t, () => grabObject(handKey, obj, t));
+  }
+  if (best) best.act();
 }
 
 function surfaceYAt(x, z) {
@@ -263,6 +253,15 @@ function nearestPlateWithin(worldPos, maxDist) {
   for (const p of Items.plates) {
     const d = p.mesh.position.distanceTo(worldPos);
     if (d < maxDist && d < bestD) { bestD = d; best = p; }
+  }
+  return best;
+}
+function findVesselOnRay(r, radius) {
+  let best = null, bestT = Infinity;
+  for (const p of Items.vessels) {
+    if (!p.onStove) continue;
+    const t = rayHit(r, p.mesh.position, radius);
+    if (t > 0 && t < bestT) { bestT = t; best = p; }
   }
   return best;
 }
@@ -363,36 +362,41 @@ function handleGrabEnd(handKey, worldPos) {
   else releaseIngredient(obj, worldPos);
 }
 
-function updateHeldObjects(dt) {
-  const a = 1 - Math.exp(-45 * dt); // seguimiento independiente de los FPS
+function updateHeldObjects() {
   for (const handKey of ['left', 'right']) {
     const obj = activeGrab[handKey];
-    if (!obj) { heldInit[handKey] = false; continue; }
-    const p = HandTracking.hands[handKey].dpinch;
-    handLocal(p.x, p.y, p.z, _tmpLocal);
-    if (!heldInit[handKey]) { heldLocal[handKey].copy(_tmpLocal); heldInit[handKey] = true; }
-    else heldLocal[handKey].lerp(_tmpLocal, a);
-    _tmpVec2.copy(heldLocal[handKey]).applyMatrix4(camera.matrixWorld);
-    obj.mesh.position.copy(_tmpVec2).add(obj.grabOffset);
+    if (!obj) continue;
+    const rays = handRays[handKey];
+    if (!rays.pinch.valid) continue;                      // mano perdida un instante: el objeto se queda donde estaba
+    rayPoint(rays.pinch, heldDepth[handKey], _tmpPinch);
+    obj.grabOffset.copy(heldOffsetLocal[handKey]).applyQuaternion(camera.quaternion);
+    obj.mesh.position.copy(_tmpPinch).add(obj.grabOffset);
   }
 }
 
-const _tmpVec = new THREE.Vector3(), _tmpVec2 = new THREE.Vector3();
-function updateHandGesturesAndInteractions(dt) {
+function updateHandGesturesAndInteractions() {
   for (const handKey of ['left', 'right']) {
     const h = HandTracking.hands[handKey];
-    if (!(h.pinchStarted && !activeGrab[handKey]) && !(h.pinchEnded && activeGrab[handKey])) continue;
-    const worldPos = pinchWorld(handKey, _tmpPinch).clone();
-    if (h.pinchStarted && !activeGrab[handKey]) handleGrabStart(handKey, worldPos);
-    if (h.pinchEnded && activeGrab[handKey]) handleGrabEnd(handKey, worldPos);
+    if (h.startCount !== seenStart[handKey]) {
+      seenStart[handKey] = h.startCount;
+      if (!activeGrab[handKey]) handleGrabStart(handKey);
+    }
+    if (h.endCount !== seenEnd[handKey]) {
+      seenEnd[handKey] = h.endCount;
+      const obj = activeGrab[handKey];
+      if (obj) {
+        const rays = handRays[handKey];
+        const dropAt = rays.pinch.valid ? rayPoint(rays.pinch, heldDepth[handKey], _tmpPinch).clone() : obj.mesh.position.clone();
+        handleGrabEnd(handKey, dropAt);
+      }
+    }
   }
-  updateHeldObjects(dt);
+  updateHeldObjects();
 }
 
 // ---------- Picar ingredientes: requiere sostener el cuchillo ----------
 const CHOP_HITS_REQUIRED = 4;
 const _chopSpikeLatch = { left: false, right: false };
-const _tmpChop = new THREE.Vector3();
 let lastNoKnifeHint = 0;
 
 function spawnChopFX(pos) {
@@ -418,8 +422,7 @@ function updateChopping() {
 
     for (const handKey of ['left', 'right']) {
       const h = HandTracking.hands[handKey];
-      const worldPos = handWorldPosition(h.dpalm.x, h.dpalm.y, h.dpalm.z, _tmpChop);
-      if (worldPos.distanceTo(obj.mesh.position) > 0.26) continue;
+      if (rayHit(handRays[handKey].palm, obj.mesh.position, 0.26 * GRAB_TOLERANCE) < 0) continue;
 
       const spikeEdge = h.chopSpike && !_chopSpikeLatch[handKey];
       _chopSpikeLatch[handKey] = h.chopSpike;
@@ -445,15 +448,13 @@ function updateChopping() {
 }
 
 // ---------- Remover con la espátula/cucharón: acelera la cocción ----------
-const _tmpStir = new THREE.Vector3();
 const _stirLatch = { left: false, right: false };
 function updateStirring() {
   for (const handKey of ['left', 'right']) {
     const held = activeGrab[handKey];
     if (held !== Items.spatula && held !== Items.ladle) { _stirLatch[handKey] = false; continue; }
     const h = HandTracking.hands[handKey];
-    const worldPos = handWorldPosition(h.dpalm.x, h.dpalm.y, h.dpalm.z, _tmpStir);
-    const nearVessel = findNearbyVessel(worldPos, 0.28);
+    const nearVessel = findVesselOnRay(handRays[handKey].palm, 0.28 * GRAB_TOLERANCE);
 
     const spikeEdge = h.chopSpike && !_stirLatch[handKey];
     _stirLatch[handKey] = h.chopSpike;
@@ -643,9 +644,10 @@ function loop() {
   Perf.update(rawDt);
   HandTracking.tick(dt);
   updatePlayerMovement(dt);
-  updateHandGesturesAndInteractions(dt);
+  HandOverlay.update(HandTracking.hands, HandTracking.aspect, !!(window.Cardboard && Cardboard.active));
+  updateHandRays();
+  updateHandGesturesAndInteractions();
   updateStoveKnob(dt);
-  updateHandVisuals();
   updateChopping();
   updateStirring();
   updateCooking(dt);
@@ -658,6 +660,7 @@ function loop() {
   Guide.update(dt, clockT);
 
   renderer.render(scene, camera);
+  HandOverlay.draw();
 }
 
 // Fusiona la geometría estática (menos llamadas de dibujo por cuadro). Se hace

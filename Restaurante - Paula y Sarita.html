@@ -116,8 +116,8 @@
      ============================================================ -->
 <div id="cardboard-divider"></div>
 <div id="cardboard-exit">
-  <button class="btn-l">✕ Salir</button>
-  <button class="btn-r">✕ Salir</button>
+  <div class="bar bar-l"><button class="btn-exit">✕ Salir</button><button class="btn-flip" title="Voltear la vista 180° (si la cocina se ve de cabeza o, al contrario, quedó al revés)">⟲ Voltear</button></div>
+  <div class="bar bar-r"><button class="btn-exit">✕ Salir</button><button class="btn-flip" title="Voltear la vista 180° (si la cocina se ve de cabeza o, al contrario, quedó al revés)">⟲ Voltear</button></div>
 </div>
 
 <!-- ============================================================
@@ -128,7 +128,7 @@
      world.js     → escena 3D, cocina, zonas de interacción (World)
      perf.js      → calidad adaptativa para sostener ~60 FPS (Perf)
      sensors.js   → giroscopio (mirar) + acelerómetro (caminar) (Sensors)
-     handmodel.js → mano 3D orgánica sobre los 21 puntos (HandModel)
+     handoverlay.js → mano en 2D (contorno) + punteros en pantalla (HandOverlay)
      items.js     → ingredientes/utensilios/platos/sartenes (Items)
      game.js      → manos, interacción y bucle principal (Game)
      guide.js     → pedidos, resaltado y tutorial paso a paso (Guide)
@@ -138,7 +138,7 @@
 <script src="world.js"></script>
 <script src="perf.js"></script>
 <script src="sensors.js"></script>
-<script src="handmodel.js"></script>
+<script src="handoverlay.js"></script>
 <script src="items.js"></script>
 <script src="game.js"></script>
 <script src="guide.js"></script>

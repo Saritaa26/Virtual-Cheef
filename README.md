@@ -25,10 +25,12 @@ Android). No requiere instalar nada.
 4. Junta pulgar e índice (**pinza**) para agarrar ingredientes, sartenes,
    utensilios y platos; sigue las instrucciones en pantalla. El punto amarillo
    entre las yemas es exactamente donde agarras.
-5. **Modo Cartón**: toca **«🥽 Modo Cartón»**, pon el celular en las gafas. El panel
-   de manos, el pedido y el tutorial se ven en los dos ojos.
-   Si la vista gira al revés de tu cabeza, toca **«↔ Invertir giro de cabeza»**
-   una vez (se recuerda).
+5. **Modo Cartón**: toca **«🥽 Modo Cartón»** y pon el celular en las gafas. El panel
+   de manos, el pedido y el tutorial se ven **pequeños en la esquina izquierda de cada
+   ojo** (el centro queda libre). Si la vista gira al revés de tu cabeza, toca
+   **«↔ Invertir giro de cabeza»** una vez (se recuerda). Si la cocina se ve **de
+   cabeza**, el botón **«⟲ Voltear»** (arriba, en cada ojo) gira la imagen 180° sin
+   tocar el giroscopio; viene activado por defecto y también se recuerda.
 
 **Importante:** la cámara y los sensores de movimiento solo funcionan sobre
 HTTPS (por eso se publica en GitHub Pages); abrir el archivo directo
@@ -47,18 +49,27 @@ El panel de manos muestra `FPS xx · res yy%`. La calidad se ajusta sola:
   reales de techo en vez de 4, y factor de píxeles inicial 1.5.
 - **Manos a 60 FPS aunque la IA entregue ~25**: los puntos se interpolan cada
   cuadro, y se filtran con One-Euro (sin temblor, sin retraso al moverse rápido).
+  Dibujarlas en 2D cuesta ~0.2 ms por cuadro.
 - El HUD solo toca el DOM cuando algo cambia; en Modo Cartón la copia por ojo se
   limita a 10 actualizaciones por segundo.
 
 ## 🖐️ Manos
 
-`handmodel.js` dibuja cada mano como una malla orgánica (palma con grosor, dedos
-de radio variable con nudillos, uñas, yemas y antebrazo con pulsera de color:
-azul = izquierda, naranja = derecha) sobre los 21 puntos detectados. Los radios
-son proporciones del tamaño de la mano medido, así que se ajusta al contorno real.
-La pinza se mide relativa al tamaño de la mano, por lo que agarra igual de bien
-cerca o lejos de la cámara. Los objetos agarrados se suavizan en coordenadas de
-cámara: siguen el giro de tu cabeza sin retraso.
+`handoverlay.js` dibuja cada mano en **2D**, como un contorno fino claro con relleno
+oscuro translúcido (el estilo del video de referencia), y un anillo de puntero entre
+las yemas del pulgar y el índice que se cierra y se llena al agarrar. Solo usa x/y de
+MediaPipe (la profundidad z es muy ruidosa y era lo que deformaba la mano) y se ve igual
+en los dos ojos del visor (sin doble imagen).
+
+- **Estabilidad:** filtro One-Euro por punto; cada mano conserva su identidad por
+  continuidad de posición (MediaPipe cambia izquierda/derecha cuadro a cuadro y a veces
+  entrega la misma mano dos veces: eso causaba el efecto «fantasma»); si una mano se
+  pierde, deja de dibujarse a los 150 ms.
+- **Tamaño:** `HandOverlay.CFG.size` (0.8) controla el tamaño del contorno respecto a
+  la pantalla y `reach` (1.15) cuánto se desplaza la palma; se ajustan en `handoverlay.js`.
+- **Agarre por rayo:** lo que ves bajo el puntero es lo que agarras, a cualquier
+  distancia (el más cercano a la cámara gana). El objeto agarrado conserva su distancia
+  y queda fijo a la vista al girar la cabeza.
 
 ## 📂 Qué hay en este repositorio
 
@@ -67,11 +78,11 @@ cámara: siguen el giro de tu cabeza sin retraso.
   `restaurante_vr_unificado.html`.
 - **`Restaurante - Paula y Sarita.html`** + módulos, la versión de trabajo en
   archivos separados (se cargan en este orden):
-  - `tracking.js` — permiso de cámara trasera (con errores claros), MediaPipe, gestos filtrados.
+  - `tracking.js` — permiso de cámara trasera (con errores claros), MediaPipe, identidad estable de las manos, gestos filtrados.
   - `world.js` — escena 3D de la cocina, zonas de interacción, fusión de mallas.
   - `perf.js` — calidad adaptativa.
   - `sensors.js` — giroscopio (mirar) y acelerómetro (caminar).
-  - `handmodel.js` — mano 3D orgánica.
+  - `handoverlay.js` — manos en 2D (contorno) y punteros en pantalla.
   - `items.js` — ingredientes, utensilios, platos, sartenes.
   - `game.js` — manos, interacción y bucle principal.
   - `guide.js` — pedidos, resaltado y tutorial paso a paso.

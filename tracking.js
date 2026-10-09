@@ -204,7 +204,7 @@ const HandTracking = (() => {
   const CHOP_VELOCITY_THRESHOLD = 0.85;
 
   // Tiempo que la mano se sigue dibujando después de perderse un instante.
-  const VISIBLE_GRACE_MS = 220;
+  const VISIBLE_GRACE_MS = 150;
 
   function makeHandState(label) {
     return {
@@ -223,6 +223,8 @@ const HandTracking = (() => {
       isPinching: false,     // true mientras se mantiene el agarre
       pinchStarted: false,   // true SOLO en el frame donde empezó el agarre
       pinchEnded: false,     // true SOLO en el frame donde se soltó
+      startCount: 0,         // cuántas pinzas han empezado / terminado (para atender cada una UNA sola vez
+      endCount: 0,           //  aunque la bandera se vea en varios cuadros de dibujo seguidos)
       chopSpike: false,      // true en el frame de un golpe rápido hacia abajo
       rollAngle: 0,          // ángulo (rad) del eje nudillos en el plano de la imagen (perilla de la estufa)
       rollValid: false,
@@ -231,6 +233,7 @@ const HandTracking = (() => {
       _prevRawPalmY: null,
       _prevT: 0,
       _lastSeen: 0,
+      _lastPalm: null,      // último centro de palma SIN filtrar (para reconocer a qué mano pertenece una detección)
       _dispValid: false,
       _filters: null
     };
@@ -254,8 +257,9 @@ const HandTracking = (() => {
 
   // Distancia en un espacio isotrópico (x y z de MediaPipe usan la escala del
   // ANCHO de la imagen, y usa la escala del ALTO; se llevan las dos a "alturas").
+  // La z de MediaPipe es mucho más ruidosa que x/y: pesa solo un 40 %.
   function iso(a, b, ar) {
-    return Math.hypot((a.x - b.x) * ar, a.y - b.y, (a.z - b.z) * ar);
+    return Math.hypot((a.x - b.x) * ar, a.y - b.y, (a.z - b.z) * ar * 0.4);
   }
 
   function ensureFilters(h) {
@@ -316,12 +320,15 @@ const HandTracking = (() => {
     if (h.isPinching && h.pinch < PINCH_OFF) h.isPinching = false;
     h.pinchStarted = h.isPinching && !h._wasPinching;
     h.pinchEnded = !h.isPinching && h._wasPinching;
+    if (h.pinchStarted) h.startCount++;
+    if (h.pinchEnded) h.endCount++;
 
     // Detector de "golpe de picar": se usa la palma SIN filtrar, porque el
     // filtro suaviza justo los picos rápidos que se quieren detectar.
-    let ry = 0;
-    for (const i of PALM_IDX) ry += rawLandmarks[i].y;
-    ry /= n;
+    let ry = 0, rx = 0;
+    for (const i of PALM_IDX) { ry += rawLandmarks[i].y; rx += rawLandmarks[i].x; }
+    ry /= n; rx /= n;
+    h._lastPalm = { x: rx, y: ry };
     if (h._prevRawPalmY != null) {
       const vy = (ry - h._prevRawPalmY) / dt; // positivo = moviéndose hacia abajo
       h._velY = lerp(h._velY, vy, 0.6);
@@ -343,9 +350,71 @@ const HandTracking = (() => {
     if (h.isPinching && h.pinch < PINCH_OFF) h.isPinching = false;
     h.pinchStarted = false;
     h.pinchEnded = !h.isPinching && h._wasPinching;
+    if (h.pinchEnded) h.endCount++;
     h.chopSpike = false;
     h.rollValid = false;
     h._prevRawPalmY = null;
+  }
+
+  // ---------- ¿A qué mano pertenece cada detección? ----------
+  // MediaPipe etiqueta "Izquierda/Derecha" cuadro por cuadro y con la cámara
+  // trasera esa etiqueta CAMBIA con facilidad; además a veces entrega dos
+  // detecciones de la MISMA mano. Fiarse de la etiqueta producía dos manos
+  // encimadas ("fantasma"/silueta doble). Ahora:
+  //   1) dos detecciones que se solapan casi por completo = la misma mano → se
+  //      deja la más confiable;
+  //   2) cada detección se asigna a la mano que ya estaba CERCA de ahí hace un
+  //      instante (continuidad), y la etiqueta solo decide cuando una mano es nueva.
+  const CONTINUITY_MS = 450;     // cuánto tiempo recordamos dónde estaba cada mano
+  const CONTINUITY_MAX = 0.32;   // movimiento máximo (en alturas de imagen) para seguir siendo "la misma mano"
+  const DUP_IOU = 0.35;          // solape de cajas a partir del cual son la misma mano
+
+  function describeDetection(lm, handedness, ar) {
+    let minX = 1, minY = 1, maxX = 0, maxY = 0, cx = 0, cy = 0;
+    for (const i of PALM_IDX) { cx += lm[i].x; cy += lm[i].y; }
+    cx /= PALM_IDX.length; cy /= PALM_IDX.length;
+    for (const p of lm) {
+      if (p.x < minX) minX = p.x; if (p.x > maxX) maxX = p.x;
+      if (p.y < minY) minY = p.y; if (p.y > maxY) maxY = p.y;
+    }
+    let label = null, score = 0.5;
+    if (handedness && handedness.label) {
+      // MediaPipe calcula "Left"/"Right" asumiendo una cámara frontal espejada;
+      // con la cámara TRASERA (sin espejo) queda invertida, se intercambia aquí.
+      label = handedness.label === 'Left' ? 'right' : 'left';
+      if (typeof handedness.score === 'number') score = handedness.score;
+    }
+    return { lm, label, score, cx, cy, box: [minX * ar, minY, maxX * ar, maxY] };
+  }
+
+  function iou(a, b) {
+    const w = Math.min(a[2], b[2]) - Math.max(a[0], b[0]);
+    const h = Math.min(a[3], b[3]) - Math.max(a[1], b[1]);
+    if (w <= 0 || h <= 0) return 0;
+    const inter = w * h;
+    const areaA = (a[2] - a[0]) * (a[3] - a[1]), areaB = (b[2] - b[0]) * (b[3] - b[1]);
+    return inter / (areaA + areaB - inter);
+  }
+
+  function slotCost(d, key, now, ar) {
+    const h = hands[key];
+    if (h._lastPalm && now - h._lastSeen < CONTINUITY_MS) {
+      const dist = Math.hypot((d.cx - h._lastPalm.x) * ar, d.cy - h._lastPalm.y);
+      return dist <= CONTINUITY_MAX ? dist : 1 + dist;          // lejos de donde estaba: casi seguro es otra mano
+    }
+    return d.label === key ? 0.05 : (d.label ? 0.4 : 0.2);      // mano nueva: manda la etiqueta
+  }
+
+  function assignDetections(dets, now, ar) {
+    if (dets.length === 1) {
+      const d = dets[0];
+      return slotCost(d, 'left', now, ar) <= slotCost(d, 'right', now, ar) ? { left: d } : { right: d };
+    }
+    const [a, b] = dets;
+    const straight = slotCost(a, 'left', now, ar) + slotCost(b, 'right', now, ar);
+    const crossed = slotCost(a, 'right', now, ar) + slotCost(b, 'left', now, ar);
+    if (Math.abs(straight - crossed) < 1e-6) return a.cx <= b.cx ? { left: a, right: b } : { left: b, right: a };
+    return straight < crossed ? { left: a, right: b } : { left: b, right: a };
   }
 
   function onResults(results) {
@@ -356,26 +425,23 @@ const HandTracking = (() => {
     }
     _lastResultAt = now;
 
-    const seen = { left: false, right: false };
-
+    const ar = aspect();
+    let dets = [];
     if (results.multiHandLandmarks && results.multiHandLandmarks.length) {
       const handedness = results.multiHandedness || [];
       for (let i = 0; i < results.multiHandLandmarks.length && i < 2; i++) {
-        let label = i === 0 ? 'left' : 'right';
-        if (handedness[i] && handedness[i].label) {
-          // MediaPipe calcula "Left"/"Right" asumiendo una cámara frontal
-          // espejada (selfie). Con la cámara TRASERA (imagen sin espejo)
-          // esa etiqueta queda invertida respecto a la mano real, así que
-          // se intercambia aquí para que corresponda a la mano anatómica.
-          label = handedness[i].label === 'Left' ? 'right' : 'left';
-        }
-        if (seen[label]) label = label === 'left' ? 'right' : 'left'; // dos manos con la misma etiqueta: la segunda va al otro lado
-        updateHandFromLandmarks(hands[label], results.multiHandLandmarks[i], now);
-        seen[label] = true;
+        dets.push(describeDetection(results.multiHandLandmarks[i], handedness[i], ar));
+      }
+      if (dets.length === 2 && iou(dets[0].box, dets[1].box) > DUP_IOU) {
+        dets = [dets[0].score >= dets[1].score ? dets[0] : dets[1]];   // la misma mano detectada dos veces
       }
     }
-    if (!seen.left) decayHand(hands.left);
-    if (!seen.right) decayHand(hands.right);
+
+    const assigned = dets.length ? assignDetections(dets, now, ar) : {};
+    for (const key of ['left', 'right']) {
+      if (assigned[key]) updateHandFromLandmarks(hands[key], assigned[key].lm, now);
+      else decayHand(hands[key]);
+    }
 
     if (statusCallback) statusCallback(hands);
   }
@@ -506,6 +572,7 @@ const HandTracking = (() => {
     get targetHz() { return targetHz; },
     get inferMs() { return inferMs; },
     get inferHz() { return inferHz; },
+    get aspect() { return aspect(); },
     get ready() { return state === 'running'; },
     get state() { return state; },
     get error() { return lastError; },

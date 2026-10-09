@@ -75,7 +75,10 @@ const Sensors = (() => {
   }
   window.addEventListener('deviceorientation', onDeviceOrientation);
 
-  function active() { return ev !== null && performance.now() - evAt < 1500; }
+  // Algunos navegadores dejan de emitir eventos si el celular está perfectamente
+  // quieto; con 1.5 s la cámara saltaba al modo teclado en esos instantes. Con 10 s
+  // se tolera la quietud, y sin sensores (PC) `ev` nunca llega y se usa el teclado.
+  function active() { return ev !== null && performance.now() - evAt < 10000; }
 
   // Algoritmo estándar (three.js DeviceOrientationControls): alpha/beta/gamma
   // del sensor + ángulo de pantalla → quaternion cámara.
@@ -126,8 +129,18 @@ const Sensors = (() => {
       _cur.slerp(_target, 1 - Math.exp(-k * Math.max(dt, 1e-3)));
     }
     out.copy(_cur);
+    // Rotación base de la VISTA (sobre el eje de mirada), aplicada DESPUÉS de todo
+    // lo anterior: no toca la calibración, el suavizado ni el mapeo del giroscopio.
+    if (viewRoll !== 0) out.multiply(_rollQ.setFromAxisAngle(AXIS_Z, viewRoll));
     return true;
   }
+
+  // Gira la imagen `rad` radianes sobre el eje de mirada (π = 180°, "de cabeza").
+  // El Modo Cartón la usa porque en horizontal el sensor reporta el celular
+  // girado media vuelta respecto a la pantalla en algunos aparatos/navegadores.
+  let viewRoll = 0;
+  const _rollQ = new THREE.Quaternion();
+  function setViewRoll(rad) { viewRoll = rad || 0; }
 
   function recenter() { headingOffset = null; }
 
@@ -203,6 +216,7 @@ const Sensors = (() => {
   return {
     enable,
     recenter,
+    setViewRoll,
     toggleOrientSign,
     orientationInto,
     consumeWalk,
@@ -210,6 +224,7 @@ const Sensors = (() => {
     get active() { return active(); },
     get supported() { return 'DeviceOrientationEvent' in window; },
     get orientSign() { return orientSign; },
+    get viewRoll() { return viewRoll; },
     get stepCount() { return stepCount; },
     get walkingEnabled() { return walkingEnabled; }
   };

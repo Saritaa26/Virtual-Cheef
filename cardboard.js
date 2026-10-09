@@ -26,6 +26,13 @@
         10 actualizaciones por segundo y SOLO cuando el contenido
         realmente cambió (clonar en cada cuadro costaba FPS).
 
+     4) Vista volteada 180°: en horizontal, el sensor de varios celulares reporta
+        el aparato girado media vuelta respecto a la pantalla y la cocina se
+        veía "de cabeza" (techo abajo). Al entrar se aplica una rotación base de
+        180° sobre el eje de mirada (`Sensors.setViewRoll`) SIN tocar el mapeo
+        del giroscopio. Si en tu celular quedara al revés, el botón «⟲ Voltear»
+        de cada ojo la quita/pone y se recuerda.
+
    Girar la cabeza (giroscopio) y caminar (acelerómetro) YA NO viven aquí:
    funcionan igual con o sin gafas y los maneja sensors.js, aplicados en el
    bucle principal (game.js) ANTES de calcular manos y objetos agarrados.
@@ -42,6 +49,21 @@
 
   let cardboardMode = false;
   let stereoInstalled = false;
+
+  // Estado público de solo lectura (game.js / handoverlay.js lo consultan).
+  window.Cardboard = { get active() { return cardboardMode; } };
+
+  // Giro de 180° de la vista: activo por defecto (ver nota 4 del encabezado).
+  const FLIP_KEY = 'rvr_cardboardFlip';
+  function storedFlip() { try { return localStorage.getItem(FLIP_KEY) !== '0'; } catch (_) { return true; } }
+  let flipView = storedFlip();
+  function applyFlip() { Sensors.setViewRoll(cardboardMode && flipView ? Math.PI : 0); }
+  function toggleFlip() {
+    flipView = !flipView;
+    try { localStorage.setItem(FLIP_KEY, flipView ? '1' : '0'); } catch (_) { /* modo privado */ }
+    applyFlip();
+    if (Game.showToast) Game.showToast('⟲ Vista volteada 180°: ' + (flipView ? 'sí' : 'no'));
+  }
 
   // ══════════════════════════════════════════════════════════
   // HUD VISIBLE EN AMBOS OJOS (ver las manos para cocinar)
@@ -158,6 +180,7 @@
       installStereoRenderer();
       Sensors.recenter();           // el frente es hacia donde ya estabas mirando
       cardboardMode = true;
+      applyFlip();
       Perf.setCap(CARDBOARD_PIXEL_CAP);
       document.body.classList.add('cardboard-on');
       installHudClones();
@@ -172,6 +195,7 @@
 
   function exitCardboard() {
     cardboardMode = false;
+    applyFlip();
     Perf.setCap(null);
     document.body.classList.remove('cardboard-on');
     stopHudClones();
@@ -181,7 +205,8 @@
   }
 
   document.getElementById('cardboard-btn').addEventListener('click', enterCardboard);
-  document.querySelectorAll('#cardboard-exit button').forEach(b => b.addEventListener('click', exitCardboard));
+  document.querySelectorAll('#cardboard-exit .btn-exit').forEach(b => b.addEventListener('click', exitCardboard));
+  document.querySelectorAll('#cardboard-exit .btn-flip').forEach(b => b.addEventListener('click', toggleFlip));
   document.getElementById('invert-gyro-btn').addEventListener('click', () => {
     const sign = Sensors.toggleOrientSign();
     if (Game.showToast) Game.showToast('↔ Giro de cabeza: ' + (sign < 0 ? 'invertido' : 'normal') + ' — prueba mover la cabeza de nuevo');

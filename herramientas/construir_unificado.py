@@ -25,21 +25,22 @@ BANNER = """<!-- ===============================================================
      ================================================================
      GENERADO por herramientas/construir_unificado.py: NO es una versión
      distinta del juego, es el MISMO proyecto que vive en varios archivos
-     (tracking.js, world.js, perf.js, sensors.js, handmodel.js, items.js,
+     (tracking.js, world.js, perf.js, sensors.js, handoverlay.js, items.js,
      game.js, guide.js, cardboard.js + styles.css) empaquetado en un único
      .html para publicarlo, abrirlo o subirlo como un solo archivo.
 
      Qué incluye:
        • Permiso automático de la cámara TRASERA en celular, con mensajes
          claros si se deniega o no hay cámara (tracking.js).
-       • Detección de manos con MediaPipe Hands + filtro One-Euro, pinza
-         relativa al tamaño de la mano y una mano 3D orgánica
-         (tracking.js, handmodel.js).
+       • Detección de manos con MediaPipe Hands: identidad estable, filtro
+         One-Euro y pinza relativa al tamaño de la mano (tracking.js); manos
+         dibujadas en 2D como contorno y punteros en pantalla (handoverlay.js).
        • Giroscopio (mirar) y acelerómetro (caminar) con suavizado, con o
          sin gafas (sensors.js).
        • Calidad adaptativa hacia 60 FPS y fusión de mallas (perf.js,
          world.js).
-       • Modo Cartón: render estéreo + HUD en cada ojo (cardboard.js).
+       • Modo Cartón: render estéreo, HUD chico en las esquinas de cada ojo
+         y vista volteable 180° (cardboard.js).
 
      Aclaración honesta sobre "WebXR": esto NO usa la API real de WebXR
      (navigator.xr). Usa DeviceOrientation para la mirada y un render
