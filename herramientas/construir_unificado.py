@@ -25,8 +25,8 @@ BANNER = """<!-- ===============================================================
      ================================================================
      GENERADO por herramientas/construir_unificado.py: NO es una versión
      distinta del juego, es el MISMO proyecto que vive en varios archivos
-     (tracking.js, world.js, perf.js, sensors.js, handoverlay.js, items.js,
-     game.js, guide.js, cardboard.js + styles.css) empaquetado en un único
+     (tracking.js, world.js, perf.js, sensors.js, handoverlay.js, cartoon.js,
+     items.js, game.js, guide.js, cardboard.js + styles.css) empaquetado en un único
      .html para publicarlo, abrirlo o subirlo como un solo archivo.
 
      Qué incluye:
@@ -35,12 +35,13 @@ BANNER = """<!-- ===============================================================
        • Detección de manos con MediaPipe Hands: identidad estable, filtro
          One-Euro y pinza relativa al tamaño de la mano (tracking.js); manos
          dibujadas en 2D como contorno y punteros en pantalla (handoverlay.js).
-       • Giroscopio (mirar) y acelerómetro (caminar) con suavizado, con o
-         sin gafas (sensors.js).
+       • Giroscopio (mirar) con corrección de deriva por brújula y
+         recentrado, y acelerómetro (caminar), con o sin gafas (sensors.js).
        • Calidad adaptativa hacia 60 FPS y fusión de mallas (perf.js,
          world.js).
-       • Modo Cartón: render estéreo, HUD chico en las esquinas de cada ojo
-         y vista volteable 180° (cardboard.js).
+       • Modo Cartón: render estéreo con cámara y rectángulo propios por ojo,
+         HUD chico en las esquinas y vista volteable 180° (cardboard.js);
+         efecto Cartoon opcional procesado por ojo (cartoon.js).
 
      Aclaración honesta sobre "WebXR": esto NO usa la API real de WebXR
      (navigator.xr). Usa DeviceOrientation para la mirada y un render

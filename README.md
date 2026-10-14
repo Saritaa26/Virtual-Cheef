@@ -36,6 +36,39 @@ Android). No requiere instalar nada.
 HTTPS (por eso se publica en GitHub Pages); abrir el archivo directo
 (`file://`) no pide esos permisos.
 
+## 🧭 Deriva del giroscopio (la vista se va girando sola)
+
+El giro lateral del giroscopio acumula error con los minutos (unos grados por minuto según
+el celular). Qué hace el juego:
+
+- **Filtro complementario con la brújula** (`sensors.js`): usa la orientación relativa
+  (suave) para lo inmediato y corrige el giro lateral hacia la brújula
+  (`deviceorientationabsolute`) muy despacio (nunca más de 0.3°/s) y solo cuando la
+  medición es confiable. Simulado: 3°/min de deriva pasa de 15° a 0.5° en 5 min; 12°/min
+  de 60° a 4°. Una anomalía magnética grande (imán de las gafas) se ignora. Se apaga con
+  el botón **«🧭 Brújula»** (y se recuerda) si en tu celular o tus gafas se comporta raro.
+- **Recentrado al quedar quieto**: al entrar al Modo Cartón el frente definitivo se fija
+  cuando el celular ya está quieto y a nivel dentro de las gafas, no al tocar el botón.
+- **Recentrar a mano**: botón «↺ Centrar», tecla **R**, o **doble toque** en cualquier parte
+  de la pantalla en Modo Cartón.
+- Limitaciones honestas: una perturbación magnética **menor de 10°** sí se sigue
+  lentamente; y sin brújula en el navegador (iPhone/Safari) solo quedan los recentrados.
+  No se usa WebXR: no hay una API nativa de "alineación espacial" disponible para
+  cartón en Chrome de Android y tomaría el control del render y de la cámara.
+
+## 🥽 Vista dividida y efecto Cartoon
+
+- Cada ojo se dibuja con **su propia cámara** y un rectángulo entero (`cardboard.js`); el
+  tamaño del lienzo lo manda el CSS y se mide en tiempo real (`world.js`), no `innerWidth`.
+- **No había ningún shader Cartoon** en el proyecto («Cartoon» era el Modo Cartón). Se añadió
+  uno opcional (botón **«🎨 Cartoon»**, apagado por defecto, `cartoon.js`) que se procesa **por
+  ojo**: cada ojo va a un render target de su tamaño exacto, el shader lee solo ese target
+  (coordenadas locales, nunca `gl_FragCoord` de la pantalla entera) y el resultado se copia con
+  viewport y scissor limitados al rectángulo del ojo. Cuesta rendimiento: úsalo solo si sobra.
+- El vidrio de la licuadora usaba `transmission`, que obligaba a three.js a dibujar toda la escena
+  otra vez (pantalla completa, MSAA ×4, aspecto equivocado en cada ojo) mientras estuviera a la vista;
+  ahora es simplemente transparente.
+
 ## ⚡ Rendimiento (objetivo: 60 FPS en celular)
 
 El panel de manos muestra `FPS xx · res yy%`. La calidad se ajusta sola:
@@ -83,6 +116,7 @@ en los dos ojos del visor (sin doble imagen).
   - `perf.js` — calidad adaptativa.
   - `sensors.js` — giroscopio (mirar) y acelerómetro (caminar).
   - `handoverlay.js` — manos en 2D (contorno) y punteros en pantalla.
+  - `cartoon.js` — efecto Cartoon opcional, procesado por ojo.
   - `items.js` — ingredientes, utensilios, platos, sartenes.
   - `game.js` — manos, interacción y bucle principal.
   - `guide.js` — pedidos, resaltado y tutorial paso a paso.

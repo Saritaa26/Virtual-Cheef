@@ -641,6 +641,7 @@ function loop() {
   lastT = now;
   clockT += dt;
 
+  World.checkSize();
   Perf.update(rawDt);
   HandTracking.tick(dt);
   updatePlayerMovement(dt);

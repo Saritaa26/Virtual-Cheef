@@ -102,8 +102,12 @@
 
   <div id="toast-wrap"></div>
 
-  <button id="recenter-btn" title="Fija como frente la dirección en la que estás mirando ahora">↺ Recentrar</button>
-  <button id="invert-gyro-btn" title="Si en el Modo Cartón la vista gira al revés de tu cabeza, toca aquí">↔ Invertir giro de cabeza</button>
+  <div id="sensor-btns">
+    <button id="invert-gyro-btn" title="Si en el Modo Cartón la vista gira al revés de tu cabeza, toca aquí">↔ Giro</button>
+    <button id="recenter-btn" title="Fija como frente la dirección en la que estás mirando ahora">↺ Centrar</button>
+    <button id="compass-btn" title="Corrige poco a poco la deriva del giroscopio usando la brújula">🧭 Brújula</button>
+    <button id="cartoon-btn" title="Efecto cartoon (posterizado y contornos); consume rendimiento">🎨 Cartoon</button>
+  </div>
   <div id="controls-hint">WASD mover · ←→ girar · ↑↓ mirar · C agacharse · pinza = agarrar</div>
 </div>
 
@@ -116,8 +120,8 @@
      ============================================================ -->
 <div id="cardboard-divider"></div>
 <div id="cardboard-exit">
-  <div class="bar bar-l"><button class="btn-exit">✕ Salir</button><button class="btn-flip" title="Voltear la vista 180° (si la cocina se ve de cabeza o, al contrario, quedó al revés)">⟲ Voltear</button></div>
-  <div class="bar bar-r"><button class="btn-exit">✕ Salir</button><button class="btn-flip" title="Voltear la vista 180° (si la cocina se ve de cabeza o, al contrario, quedó al revés)">⟲ Voltear</button></div>
+  <div class="bar bar-l"><button class="btn-exit">✕ Salir</button><button class="btn-cartoon" title="Efecto Cartoon por ojo">🎨</button><button class="btn-flip" title="Voltear la vista 180° (si la cocina se ve de cabeza o, al contrario, quedó al revés)">⟲ Voltear</button></div>
+  <div class="bar bar-r"><button class="btn-exit">✕ Salir</button><button class="btn-cartoon" title="Efecto Cartoon por ojo">🎨</button><button class="btn-flip" title="Voltear la vista 180° (si la cocina se ve de cabeza o, al contrario, quedó al revés)">⟲ Voltear</button></div>
 </div>
 
 <!-- ============================================================
@@ -129,6 +133,7 @@
      perf.js      → calidad adaptativa para sostener ~60 FPS (Perf)
      sensors.js   → giroscopio (mirar) + acelerómetro (caminar) (Sensors)
      handoverlay.js → mano en 2D (contorno) + punteros en pantalla (HandOverlay)
+     cartoon.js   → efecto cartoon opcional, procesado por ojo (Cartoon)
      items.js     → ingredientes/utensilios/platos/sartenes (Items)
      game.js      → manos, interacción y bucle principal (Game)
      guide.js     → pedidos, resaltado y tutorial paso a paso (Guide)
@@ -139,6 +144,7 @@
 <script src="perf.js"></script>
 <script src="sensors.js"></script>
 <script src="handoverlay.js"></script>
+<script src="cartoon.js"></script>
 <script src="items.js"></script>
 <script src="game.js"></script>
 <script src="guide.js"></script>

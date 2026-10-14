@@ -144,17 +144,47 @@ const World = (() => {
     stencil: false
   });
   renderer.setPixelRatio(IS_MOBILE ? Math.min(DPR, 1.5) : Math.min(DPR, 2));
-  renderer.setSize(innerWidth, innerHeight);
   renderer.setClearColor(0x000000, 0);
   renderer.outputColorSpace = THREE.SRGBColorSpace;
   renderer.toneMapping = THREE.ACESFilmicToneMapping;
   renderer.toneMappingExposure = 1.05;
 
-  window.addEventListener('resize', () => {
-    camera.aspect = innerWidth / innerHeight;
+  // ---------- Tamaño del lienzo: lo manda el CSS, no `innerWidth` ----------
+  // Antes se hacía `renderer.setSize(innerWidth, innerHeight)`, que además fija
+  // el tamaño EN PÍXELES dentro del atributo style del canvas (pisa el
+  // `width:100%` del CSS). En Android, al girar la pantalla o entrar a pantalla
+  // completa (Modo Cartón), `innerWidth/innerHeight` llegan a veces desactualizados
+  // en el evento `resize`: el canvas quedaba con un tamaño viejo y la división en
+  // dos ojos ya no coincidía con la pantalla ni con el divisor central.
+  // Ahora el canvas ocupa toda la ventana por CSS y se mide lo que REALMENTE
+  // mide (`clientWidth/Height`), cada vez que cambia (ResizeObserver) o que el
+  // navegador avisa (resize, orientationchange, fullscreenchange, visualViewport).
+  const viewSize = { w: 1, h: 1 };
+  function syncSize() {
+    const w = Math.max(1, Math.round(canvasEl.clientWidth || window.innerWidth));
+    const h = Math.max(1, Math.round(canvasEl.clientHeight || window.innerHeight));
+    if (w === viewSize.w && h === viewSize.h) return;
+    viewSize.w = w; viewSize.h = h;
+    renderer.setSize(w, h, false);          // false = no tocar el style del canvas (lo manda el CSS)
+    camera.aspect = w / h;
     camera.updateProjectionMatrix();
-    renderer.setSize(innerWidth, innerHeight);
-  });
+  }
+  syncSize();
+  // Respaldo: si el navegador no entregó el evento (pestaña oculta, vista emulada,
+  // algunos Android al entrar a pantalla completa), el bucle principal lo detecta
+  // comparando innerWidth/innerHeight, que no fuerza ningún cálculo de layout.
+  let seenIW = window.innerWidth, seenIH = window.innerHeight;
+  function checkSize() {
+    if (window.innerWidth !== seenIW || window.innerHeight !== seenIH) {
+      seenIW = window.innerWidth; seenIH = window.innerHeight;
+      syncSize();
+    }
+  }
+  window.addEventListener('resize', syncSize);
+  window.addEventListener('orientationchange', syncSize);
+  document.addEventListener('fullscreenchange', syncSize);
+  if (window.visualViewport) window.visualViewport.addEventListener('resize', syncSize);
+  if (window.ResizeObserver) new ResizeObserver(syncSize).observe(canvasEl);
 
   // ---------- Iluminación: brillante, pareja, "profesional" ----------
   // Luz ambiental + hemisférica altas para eliminar el look oscuro de
@@ -482,7 +512,11 @@ const World = (() => {
     base.position.set(ZONE.blender.pos.x, COUNTER_TOP_Y + 0.045, ZONE.blender.pos.z);
     scene.add(base);
     const jar = new THREE.Mesh(new THREE.CylinderGeometry(0.06, 0.05, 0.22, 16),
-      new THREE.MeshPhysicalMaterial({ color: 0xbfe9ff, roughness: 0.15, transmission: 0.6, transparent: true, opacity: 0.55, metalness: 0 }));
+      // Vidrio del frasco SIN `transmission`: con transmisión, three.js vuelve a dibujar TODA la escena
+      // en un render target del tamaño de la pantalla con MSAA x4 cada cuadro que el frasco está a la vista
+      // (en Modo Cartón son 4 pasadas de escena) y, en la vista dividida, con el aspecto equivocado.
+      // Transparente a secas se ve casi igual y cuesta una fracción.
+      new THREE.MeshStandardMaterial({ color: 0xbfe9ff, roughness: 0.1, transparent: true, opacity: 0.45, metalness: 0 }));
     jar.position.set(ZONE.blender.pos.x, COUNTER_TOP_Y + 0.2, ZONE.blender.pos.z);
     scene.add(jar);
     const lid = new THREE.Mesh(new THREE.CylinderGeometry(0.062, 0.062, 0.025, 16), darkSteelMat);
@@ -748,7 +782,7 @@ const World = (() => {
   }
 
   return {
-    batchStats, batchStatic, IS_MOBILE,
+    batchStats, batchStatic, IS_MOBILE, viewSize, syncSize, checkSize,
     scene, camera, renderer,
     ZONE, colliders, resolvePlayerXZ,
     ROOM_HALF, WALL_H, BACK_WALL_Z, COUNTER_DEPTH, COUNTER_TOP_Y, PLAYER_EYE, PLAYER_RADIUS, STOVE_CX,

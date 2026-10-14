@@ -77,12 +77,12 @@ const HandOverlay = (() => {
   }
   const state = { left: makeState(), right: makeState() };
 
+  // Mismo tamaño que el lienzo 3D (World.viewSize), para que las manos caigan donde cae el render.
   function resize() {
     dpr = Math.min(window.devicePixelRatio || 1, 1.5);   // el trazo es fino: no hace falta más resolución
-    W = window.innerWidth; H = window.innerHeight;
+    W = World.viewSize.w; H = World.viewSize.h;
     canvas.width = Math.round(W * dpr); canvas.height = Math.round(H * dpr);
   }
-  window.addEventListener('resize', resize);
   resize();
 
   function dist(a, b) { return Math.hypot(a.x - b.x, a.y - b.y); }
@@ -90,9 +90,9 @@ const HandOverlay = (() => {
   // Proyecta los puntos de una mano (coordenadas normalizadas de la cámara) a
   // píxeles de la mitad/pantalla activa y calcula los punteros (NDC).
   function update(hands, imageAspect, stereo) {
-    if (W !== window.innerWidth || H !== window.innerHeight) resize();
+    if (W !== World.viewSize.w || H !== World.viewSize.h) resize();
     view.stereo = stereo;
-    view.vw = stereo ? W / 2 : W;
+    view.vw = stereo ? Math.floor(W / 2) : W;               // la MISMA mitad entera que usa el render estéreo
     view.vh = H;
     view.aspect = view.vh > 0 ? view.vw / view.vh : 1;
     const U = Math.min(view.vw, view.vh);
@@ -223,7 +223,7 @@ const HandOverlay = (() => {
     octx.clearRect(0, 0, off.width, off.height);
     for (const st of hands) drawHandShape(st);
 
-    const copies = view.stereo ? [0, view.vw] : [0];
+    const copies = view.stereo ? [0, W - view.vw] : [0];   // ojo derecho: pegado al borde derecho
     for (const ox of copies) {
       ctx.setTransform(1, 0, 0, 1, 0, 0);
       ctx.drawImage(off, Math.round(ox * dpr), 0);

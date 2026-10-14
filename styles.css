@@ -315,21 +315,24 @@ button.secondary:hover{border-color:var(--accent);}
    El signo correcto de esta compensación varía según el celular/navegador
    y no se puede adivinar sin probarlo en el dispositivo real — este botón
    deja que el usuario lo invierta él mismo con un toque (ver cardboard.js). */
-#invert-gyro-btn,#recenter-btn{
-  position:absolute;bottom:50px;left:50%;
+#sensor-btns{
+  position:absolute;bottom:50px;left:50%;transform:translateX(-50%);
+  display:flex;gap:5px;pointer-events:none;
+}
+#sensor-btns button{
   pointer-events:auto;
   background:var(--panel-bg);
   border:1px solid var(--panel-border);
   color:var(--muted);
   font-size:11px;
-  padding:5px 12px;
+  padding:5px 10px;
   border-radius:16px;
   cursor:pointer;
   white-space:nowrap;
 }
-#invert-gyro-btn{transform:translateX(calc(-100% - 4px));}
-#recenter-btn{transform:translateX(4px);}
-#invert-gyro-btn:hover,#recenter-btn:hover{color:var(--ink);border-color:var(--accent);}
+#sensor-btns button:hover{color:var(--ink);border-color:var(--accent);}
+/* interruptores (brújula, cartoon): borde de acento cuando están activados */
+#sensor-btns button.on,#cardboard-exit button.on{color:var(--ink);border-color:var(--accent);box-shadow:0 0 0 1px var(--accent) inset;}
 
 /* ============================================================
    MODO CARTÓN (gafas de plástico/cartón + celular)
@@ -432,7 +435,8 @@ body.cardboard-on .cardboard-hud{display:flex;}
   /* Se queda en su propia fila (bottom:50, heredado) en vez de bajar
      a bottom:16 — ahí abajo ya compiten stove-indicator/held-info por
      el mismo ancho y en celular angosto sí llegan a chocar. */
-  #invert-gyro-btn,#recenter-btn{font-size:10px;padding:5px 10px;}
+  #sensor-btns{gap:4px;}
+  #sensor-btns button{font-size:9.5px;padding:5px 7px;}
 }
 
 /* Celular angosto en vertical: aquí es donde el diseño de PC se

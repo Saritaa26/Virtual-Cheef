@@ -4,8 +4,8 @@
      ================================================================
      GENERADO por herramientas/construir_unificado.py: NO es una versión
      distinta del juego, es el MISMO proyecto que vive en varios archivos
-     (tracking.js, world.js, perf.js, sensors.js, handoverlay.js, items.js,
-     game.js, guide.js, cardboard.js + styles.css) empaquetado en un único
+     (tracking.js, world.js, perf.js, sensors.js, handoverlay.js, cartoon.js,
+     items.js, game.js, guide.js, cardboard.js + styles.css) empaquetado en un único
      .html para publicarlo, abrirlo o subirlo como un solo archivo.
 
      Qué incluye:
@@ -14,12 +14,13 @@
        • Detección de manos con MediaPipe Hands: identidad estable, filtro
          One-Euro y pinza relativa al tamaño de la mano (tracking.js); manos
          dibujadas en 2D como contorno y punteros en pantalla (handoverlay.js).
-       • Giroscopio (mirar) y acelerómetro (caminar) con suavizado, con o
-         sin gafas (sensors.js).
+       • Giroscopio (mirar) con corrección de deriva por brújula y
+         recentrado, y acelerómetro (caminar), con o sin gafas (sensors.js).
        • Calidad adaptativa hacia 60 FPS y fusión de mallas (perf.js,
          world.js).
-       • Modo Cartón: render estéreo, HUD chico en las esquinas de cada ojo
-         y vista volteable 180° (cardboard.js).
+       • Modo Cartón: render estéreo con cámara y rectángulo propios por ojo,
+         HUD chico en las esquinas y vista volteable 180° (cardboard.js);
+         efecto Cartoon opcional procesado por ojo (cartoon.js).
 
      Aclaración honesta sobre "WebXR": esto NO usa la API real de WebXR
      (navigator.xr). Usa DeviceOrientation para la mirada y un render
@@ -353,21 +354,24 @@ button.secondary:hover{border-color:var(--accent);}
    El signo correcto de esta compensación varía según el celular/navegador
    y no se puede adivinar sin probarlo en el dispositivo real — este botón
    deja que el usuario lo invierta él mismo con un toque (ver cardboard.js). */
-#invert-gyro-btn,#recenter-btn{
-  position:absolute;bottom:50px;left:50%;
+#sensor-btns{
+  position:absolute;bottom:50px;left:50%;transform:translateX(-50%);
+  display:flex;gap:5px;pointer-events:none;
+}
+#sensor-btns button{
   pointer-events:auto;
   background:var(--panel-bg);
   border:1px solid var(--panel-border);
   color:var(--muted);
   font-size:11px;
-  padding:5px 12px;
+  padding:5px 10px;
   border-radius:16px;
   cursor:pointer;
   white-space:nowrap;
 }
-#invert-gyro-btn{transform:translateX(calc(-100% - 4px));}
-#recenter-btn{transform:translateX(4px);}
-#invert-gyro-btn:hover,#recenter-btn:hover{color:var(--ink);border-color:var(--accent);}
+#sensor-btns button:hover{color:var(--ink);border-color:var(--accent);}
+/* interruptores (brújula, cartoon): borde de acento cuando están activados */
+#sensor-btns button.on,#cardboard-exit button.on{color:var(--ink);border-color:var(--accent);box-shadow:0 0 0 1px var(--accent) inset;}
 
 /* ============================================================
    MODO CARTÓN (gafas de plástico/cartón + celular)
@@ -470,7 +474,8 @@ body.cardboard-on .cardboard-hud{display:flex;}
   /* Se queda en su propia fila (bottom:50, heredado) en vez de bajar
      a bottom:16 — ahí abajo ya compiten stove-indicator/held-info por
      el mismo ancho y en celular angosto sí llegan a chocar. */
-  #invert-gyro-btn,#recenter-btn{font-size:10px;padding:5px 10px;}
+  #sensor-btns{gap:4px;}
+  #sensor-btns button{font-size:9.5px;padding:5px 7px;}
 }
 
 /* Celular angosto en vertical: aquí es donde el diseño de PC se
@@ -621,8 +626,12 @@ body.cardboard-on .cardboard-hud{display:flex;}
 
   <div id="toast-wrap"></div>
 
-  <button id="recenter-btn" title="Fija como frente la dirección en la que estás mirando ahora">↺ Recentrar</button>
-  <button id="invert-gyro-btn" title="Si en el Modo Cartón la vista gira al revés de tu cabeza, toca aquí">↔ Invertir giro de cabeza</button>
+  <div id="sensor-btns">
+    <button id="invert-gyro-btn" title="Si en el Modo Cartón la vista gira al revés de tu cabeza, toca aquí">↔ Giro</button>
+    <button id="recenter-btn" title="Fija como frente la dirección en la que estás mirando ahora">↺ Centrar</button>
+    <button id="compass-btn" title="Corrige poco a poco la deriva del giroscopio usando la brújula">🧭 Brújula</button>
+    <button id="cartoon-btn" title="Efecto cartoon (posterizado y contornos); consume rendimiento">🎨 Cartoon</button>
+  </div>
   <div id="controls-hint">WASD mover · ←→ girar · ↑↓ mirar · C agacharse · pinza = agarrar</div>
 </div>
 
@@ -635,8 +644,8 @@ body.cardboard-on .cardboard-hud{display:flex;}
      ============================================================ -->
 <div id="cardboard-divider"></div>
 <div id="cardboard-exit">
-  <div class="bar bar-l"><button class="btn-exit">✕ Salir</button><button class="btn-flip" title="Voltear la vista 180° (si la cocina se ve de cabeza o, al contrario, quedó al revés)">⟲ Voltear</button></div>
-  <div class="bar bar-r"><button class="btn-exit">✕ Salir</button><button class="btn-flip" title="Voltear la vista 180° (si la cocina se ve de cabeza o, al contrario, quedó al revés)">⟲ Voltear</button></div>
+  <div class="bar bar-l"><button class="btn-exit">✕ Salir</button><button class="btn-cartoon" title="Efecto Cartoon por ojo">🎨</button><button class="btn-flip" title="Voltear la vista 180° (si la cocina se ve de cabeza o, al contrario, quedó al revés)">⟲ Voltear</button></div>
+  <div class="bar bar-r"><button class="btn-exit">✕ Salir</button><button class="btn-cartoon" title="Efecto Cartoon por ojo">🎨</button><button class="btn-flip" title="Voltear la vista 180° (si la cocina se ve de cabeza o, al contrario, quedó al revés)">⟲ Voltear</button></div>
 </div>
 
 <!-- ============================================================
@@ -648,6 +657,7 @@ body.cardboard-on .cardboard-hud{display:flex;}
      perf.js      → calidad adaptativa para sostener ~60 FPS (Perf)
      sensors.js   → giroscopio (mirar) + acelerómetro (caminar) (Sensors)
      handoverlay.js → mano en 2D (contorno) + punteros en pantalla (HandOverlay)
+     cartoon.js   → efecto cartoon opcional, procesado por ojo (Cartoon)
      items.js     → ingredientes/utensilios/platos/sartenes (Items)
      game.js      → manos, interacción y bucle principal (Game)
      guide.js     → pedidos, resaltado y tutorial paso a paso (Guide)
@@ -1390,17 +1400,47 @@ const World = (() => {
     stencil: false
   });
   renderer.setPixelRatio(IS_MOBILE ? Math.min(DPR, 1.5) : Math.min(DPR, 2));
-  renderer.setSize(innerWidth, innerHeight);
   renderer.setClearColor(0x000000, 0);
   renderer.outputColorSpace = THREE.SRGBColorSpace;
   renderer.toneMapping = THREE.ACESFilmicToneMapping;
   renderer.toneMappingExposure = 1.05;
 
-  window.addEventListener('resize', () => {
-    camera.aspect = innerWidth / innerHeight;
+  // ---------- Tamaño del lienzo: lo manda el CSS, no `innerWidth` ----------
+  // Antes se hacía `renderer.setSize(innerWidth, innerHeight)`, que además fija
+  // el tamaño EN PÍXELES dentro del atributo style del canvas (pisa el
+  // `width:100%` del CSS). En Android, al girar la pantalla o entrar a pantalla
+  // completa (Modo Cartón), `innerWidth/innerHeight` llegan a veces desactualizados
+  // en el evento `resize`: el canvas quedaba con un tamaño viejo y la división en
+  // dos ojos ya no coincidía con la pantalla ni con el divisor central.
+  // Ahora el canvas ocupa toda la ventana por CSS y se mide lo que REALMENTE
+  // mide (`clientWidth/Height`), cada vez que cambia (ResizeObserver) o que el
+  // navegador avisa (resize, orientationchange, fullscreenchange, visualViewport).
+  const viewSize = { w: 1, h: 1 };
+  function syncSize() {
+    const w = Math.max(1, Math.round(canvasEl.clientWidth || window.innerWidth));
+    const h = Math.max(1, Math.round(canvasEl.clientHeight || window.innerHeight));
+    if (w === viewSize.w && h === viewSize.h) return;
+    viewSize.w = w; viewSize.h = h;
+    renderer.setSize(w, h, false);          // false = no tocar el style del canvas (lo manda el CSS)
+    camera.aspect = w / h;
     camera.updateProjectionMatrix();
-    renderer.setSize(innerWidth, innerHeight);
-  });
+  }
+  syncSize();
+  // Respaldo: si el navegador no entregó el evento (pestaña oculta, vista emulada,
+  // algunos Android al entrar a pantalla completa), el bucle principal lo detecta
+  // comparando innerWidth/innerHeight, que no fuerza ningún cálculo de layout.
+  let seenIW = window.innerWidth, seenIH = window.innerHeight;
+  function checkSize() {
+    if (window.innerWidth !== seenIW || window.innerHeight !== seenIH) {
+      seenIW = window.innerWidth; seenIH = window.innerHeight;
+      syncSize();
+    }
+  }
+  window.addEventListener('resize', syncSize);
+  window.addEventListener('orientationchange', syncSize);
+  document.addEventListener('fullscreenchange', syncSize);
+  if (window.visualViewport) window.visualViewport.addEventListener('resize', syncSize);
+  if (window.ResizeObserver) new ResizeObserver(syncSize).observe(canvasEl);
 
   // ---------- Iluminación: brillante, pareja, "profesional" ----------
   // Luz ambiental + hemisférica altas para eliminar el look oscuro de
@@ -1728,7 +1768,11 @@ const World = (() => {
     base.position.set(ZONE.blender.pos.x, COUNTER_TOP_Y + 0.045, ZONE.blender.pos.z);
     scene.add(base);
     const jar = new THREE.Mesh(new THREE.CylinderGeometry(0.06, 0.05, 0.22, 16),
-      new THREE.MeshPhysicalMaterial({ color: 0xbfe9ff, roughness: 0.15, transmission: 0.6, transparent: true, opacity: 0.55, metalness: 0 }));
+      // Vidrio del frasco SIN `transmission`: con transmisión, three.js vuelve a dibujar TODA la escena
+      // en un render target del tamaño de la pantalla con MSAA x4 cada cuadro que el frasco está a la vista
+      // (en Modo Cartón son 4 pasadas de escena) y, en la vista dividida, con el aspecto equivocado.
+      // Transparente a secas se ve casi igual y cuesta una fracción.
+      new THREE.MeshStandardMaterial({ color: 0xbfe9ff, roughness: 0.1, transparent: true, opacity: 0.45, metalness: 0 }));
     jar.position.set(ZONE.blender.pos.x, COUNTER_TOP_Y + 0.2, ZONE.blender.pos.z);
     scene.add(jar);
     const lid = new THREE.Mesh(new THREE.CylinderGeometry(0.062, 0.062, 0.025, 16), darkSteelMat);
@@ -1994,7 +2038,7 @@ const World = (() => {
   }
 
   return {
-    batchStats, batchStatic, IS_MOBILE,
+    batchStats, batchStatic, IS_MOBILE, viewSize, syncSize, checkSize,
     scene, camera, renderer,
     ZONE, colliders, resolvePlayerXZ,
     ROOM_HALF, WALL_H, BACK_WALL_Z, COUNTER_DEPTH, COUNTER_TOP_Y, PLAYER_EYE, PLAYER_RADIUS, STOVE_CX,
@@ -2138,6 +2182,12 @@ window.Perf = Perf;
       el ruido del sensor (la vista no tiembla), y en un giro rápido casi no
       añade retraso. Es independiente de los FPS (usa el dt real del cuadro).
 
+      DERIVA: el giro lateral de la fuente relativa se acumula con los minutos. Se
+      corrige con un filtro complementario hacia la brújula (deviceorientationabsolute)
+      con ganancia muy baja y compuertas anti-interferencia; además `recenterWhenStable`
+      fija el frente cuando el celular ya está quieto dentro de las gafas, y se puede
+      recentrar a mano (botón, tecla R o doble toque en Modo Cartón).
+
    2) CAMINAR (DeviceMotionEvent): cada paso real se detecta como un pico
       del acelerómetro por encima de su línea base (con histéresis y
       cooldown para no contar dos veces un mismo paso). El acelerómetro no
@@ -2182,17 +2232,39 @@ const Sensors = (() => {
   // interruptor de un toque (botón "↔ Invertir giro de cabeza") y se recuerda.
   let orientSign = parseFloat(storageGet('rvr_orientSign')) || 1;
 
-  let ev = null;            // { alpha, beta, gamma }
+  // Dos fuentes de orientación, con virtudes opuestas:
+  //   · RELATIVA (`deviceorientation`): giroscopio + acelerómetro. Es suave y
+  //     rápida, el cabeceo/ladeo no derivan (la gravedad los corrige), pero el
+  //     GIRO LATERAL (yaw) se va acumulando sin corrección: es la "deriva" —
+  //     unos grados por minuto según el celular y su temperatura.
+  //   · ABSOLUTA (`deviceorientationabsolute`): usa además la brújula. No deriva
+  //     nunca, pero es ruidosa (±5-10°) y se desvía cerca de metales/imanes.
+  // Un FILTRO COMPLEMENTARIO usa cada una donde es buena: lo inmediato sale de la
+  // relativa y, MUY despacio, el yaw se va corrigiendo hacia la absoluta (ver
+  // updateCompass). Así la vista no tiembla ni se descuadra con los minutos.
+  let ev = null;            // { alpha, beta, gamma, absolute }
   let evAt = 0;             // performance.now() de la última lectura válida
+  let evAbs = null;         // lo mismo, de la fuente absoluta
+  let evAbsAt = 0;
   let headingOffset = null; // rumbo del dispositivo al calibrar (null = recalibrar en el próximo cuadro)
   let hasCur = false;
 
+  function readOrientation(e) {
+    if (e.alpha == null && e.beta == null && e.gamma == null) return null; // sensor sin datos (típico en PC)
+    return { alpha: e.alpha || 0, beta: e.beta || 0, gamma: e.gamma || 0, absolute: !!e.absolute };
+  }
   function onDeviceOrientation(e) {
-    if (e.alpha == null && e.beta == null && e.gamma == null) return; // sensor sin datos (típico en PC)
-    ev = { alpha: e.alpha || 0, beta: e.beta || 0, gamma: e.gamma || 0 };
-    evAt = performance.now();
+    const o = readOrientation(e);
+    if (!o) return;
+    ev = o; evAt = performance.now();
+  }
+  function onDeviceOrientationAbsolute(e) {
+    const o = readOrientation(e);
+    if (!o) return;
+    evAbs = o; evAbsAt = performance.now();
   }
   window.addEventListener('deviceorientation', onDeviceOrientation);
+  window.addEventListener('deviceorientationabsolute', onDeviceOrientationAbsolute);
 
   // Algunos navegadores dejan de emitir eventos si el celular está perfectamente
   // quieto; con 1.5 s la cámara saltaba al modo teclado en esos instantes. Con 10 s
@@ -2201,10 +2273,10 @@ const Sensors = (() => {
 
   // Algoritmo estándar (three.js DeviceOrientationControls): alpha/beta/gamma
   // del sensor + ángulo de pantalla → quaternion cámara.
-  function deviceQuaternion(out) {
-    const alpha = THREE.MathUtils.degToRad(ev.alpha);
-    const beta = THREE.MathUtils.degToRad(ev.beta);
-    const gamma = THREE.MathUtils.degToRad(ev.gamma);
+  function deviceQuaternion(src, out) {
+    const alpha = THREE.MathUtils.degToRad(src.alpha);
+    const beta = THREE.MathUtils.degToRad(src.beta);
+    const gamma = THREE.MathUtils.degToRad(src.gamma);
     const screenAngle = (screen.orientation && screen.orientation.angle) || window.orientation || 0;
     const orient = THREE.MathUtils.degToRad(screenAngle) * orientSign;
     _euler.set(beta, alpha, -gamma, 'YXZ');
@@ -2224,28 +2296,114 @@ const Sensors = (() => {
     return _v.y < 0 ? Math.atan2(-_u.x, -_u.z) : Math.atan2(_u.x, _u.z);
   }
 
+  const DEG = Math.PI / 180;
+  function wrap(a) { return a - 2 * Math.PI * Math.round(a / (2 * Math.PI)); }
+
+  // ---------- Filtro complementario con la brújula (corrige la deriva del yaw) ----------
+  // yawBias = cuánto hay que SUMAR al rumbo relativo para acercarlo al de la
+  // brújula. Se mueve con una constante de tiempo larga (TAU) y una velocidad
+  // máxima baja, y solo cuando la medición es confiable:
+  //   · la brújula está "fresca" y es una fuente distinta de la relativa;
+  //   · lo que FALTA por corregir (el desacuerdo promediado menos lo ya corregido)
+  //     es menor de GATE (10°): una diferencia grande y repentina casi siempre es
+  //     una anomalía magnética (imán de las gafas, metal, parlantes), no deriva
+  //     (la deriva real es de décimas de grado por segundo), y se ignora;
+  //   · el desacuerdo es ESTABLE (eDev bajo): una brújula que baila se descarta;
+  //   · la cabeza no se está moviendo rápido (las dos fuentes llegan en eventos
+  //     distintos y, girando, no están alineadas en el tiempo).
+  // Con TAU = 20 s el ruido de la brújula (±8°) queda en décimas de grado, y una
+  // deriva real de unos 3°/min se corrige con ~1° de retraso. Primero se calibra 3 s
+  // (sin corregir) y la corrección nunca pasa de 0.3°/s (18°/min).
+  let compassEnabled = storageGet('rvr_compass') !== '0';
+  const COMPASS = { TAU: 20, MAX_RATE: 0.3 * DEG, DEV_MAX: 7 * DEG, GATE: 10 * DEG, SPEED_MAX: 35 * DEG, FRESH_MS: 1000, AVG_TAU: 1.5, CAL_SECONDS: 3 };
+  let compassRef = null;    // desacuerdo brújula-relativa medido al calibrar (el "cero")
+  let eAvg = 0, eDev = 0;   // desacuerdo promedio y su variabilidad
+  let yawBias = 0;
+  let calT = 0, calS = 0, calC = 0;   // acumuladores de la media circular durante la calibración
+  let compassLive = false;  // ¿se está usando de verdad la brújula en este momento?
+  const _Dabs = new THREE.Quaternion();
+
+  function resetCompass() { compassRef = null; eAvg = 0; eDev = 0; yawBias = 0; compassLive = false; calT = 0; calS = 0; calC = 0; }
+
+  function updateCompass(dt, speed) {
+    compassLive = false;
+    if (!compassEnabled || !evAbs || ev.absolute) return;      // sin brújula, apagada, o la fuente ya es absoluta
+    const now = performance.now();
+    if (now - evAbsAt > COMPASS.FRESH_MS || now - evAt > COMPASS.FRESH_MS) return;
+    const hRel = headingOf(_D);
+    deviceQuaternion(evAbs, _Dabs);
+    const diff = wrap(headingOf(_Dabs) - hRel);
+    if (compassRef === null) {
+      // El "cero" se promedia durante CAL_SECONDS (media circular): una sola lectura
+      // ruidosa (±8°) lo dejaría con un error constante que se vería como deriva.
+      if (speed < COMPASS.SPEED_MAX) { calS += Math.sin(diff) * dt; calC += Math.cos(diff) * dt; calT += dt; }
+      if (calT >= COMPASS.CAL_SECONDS) { compassRef = Math.atan2(calS, calC); eAvg = 0; eDev = 0; }
+      return;
+    }
+    const e = wrap(diff - compassRef);                         // deriva acumulada de la fuente relativa (con signo)
+    const a = 1 - Math.exp(-dt / COMPASS.AVG_TAU);
+    const d = wrap(e - eAvg);
+    eAvg = wrap(eAvg + d * a);
+    eDev += (Math.abs(d) - eDev) * a;
+    const resid = wrap(eAvg - yawBias);                        // lo que todavía falta corregir
+    if (Math.abs(resid) > COMPASS.GATE || eDev > COMPASS.DEV_MAX || speed > COMPASS.SPEED_MAX) return;
+    compassLive = true;
+    yawBias = wrap(yawBias + clamp(resid * dt / COMPASS.TAU, -COMPASS.MAX_RATE * dt, COMPASS.MAX_RATE * dt));
+  }
+
+  // ---------- Recentrar cuando el celular ya está QUIETO y a nivel ----------
+  // Calibrar al tocar el botón «Modo Cartón» fijaba el "frente" mientras el
+  // celular todavía estaba en tu mano (apuntando al piso o a tu regazo); al
+  // ponerlo en las gafas el frente quedaba en otra dirección y parecía una
+  // descalibración. Esto espera a que el celular esté casi inmóvil y con el
+  // horizonte a la vista (ya puesto en el visor) y recién entonces centra.
+  const STILL = { SPEED: 4 * DEG, SECONDS: 1.2, MAX_WAIT: 25, LEVEL_SIN: 0.64 };
+  let settle = null;
+  function recenterWhenStable(onDone) { settle = { quiet: 0, waited: 0, onDone }; }
+  function cancelRecenterWhenStable() { settle = null; }
+  function updateSettle(dt, speed) {
+    if (!settle) return;
+    settle.waited += dt;
+    _v.set(0, 0, -1).applyQuaternion(_D);
+    if (speed < STILL.SPEED && Math.abs(_v.y) < STILL.LEVEL_SIN) settle.quiet += dt; else settle.quiet = 0;
+    if (settle.quiet >= STILL.SECONDS || settle.waited >= STILL.MAX_WAIT) {
+      const ok = settle.quiet >= STILL.SECONDS, cb = settle.onDone;
+      settle = null;
+      recenter();
+      if (cb) cb(ok);
+    }
+  }
+
   // Suavizado: constante de seguimiento (1/s) entre K_MIN (cabeza casi quieta,
   // filtra ruido) y K_MAX (giro rápido, casi sin retraso).
   const K_MIN = 14, K_MAX = 70;
   const SPEED_LOW = 0.15, SPEED_HIGH = 2.0; // rad/s del objetivo (≈ 9°/s y 115°/s)
+  const _prevD = new THREE.Quaternion();
+  let hasPrevD = false;
 
   // Escribe en `out` la orientación de la cámara para un jugador que mira hacia
   // `yaw` (rad, el de las flechas del teclado). Devuelve false si no hay sensor.
   function orientationInto(out, yaw, dt) {
-    if (!active()) return false;
-    deviceQuaternion(_D);
-    if (headingOffset === null) { headingOffset = headingOf(_D); hasCur = false; }
+    if (!active()) { hasPrevD = false; return false; }
+    dt = Math.max(dt, 1e-3);
+    deviceQuaternion(ev, _D);
+    const relSpeed = hasPrevD ? _prevD.angleTo(_D) / dt : 0;   // velocidad angular REAL de la cabeza (antes de filtrar)
+    _prevD.copy(_D); hasPrevD = true;
 
-    _yawQ.setFromAxisAngle(AXIS_Y, yaw - headingOffset);
+    if (headingOffset === null) { headingOffset = headingOf(_D); hasCur = false; resetCompass(); }
+    updateCompass(dt, relSpeed);
+    updateSettle(dt, relSpeed);
+
+    _yawQ.setFromAxisAngle(AXIS_Y, yaw - headingOffset + yawBias);
     _target.copy(_yawQ).multiply(_D);
 
     if (!hasCur) {
       _cur.copy(_target); _prevTarget.copy(_target); hasCur = true;
     } else {
-      const speed = _prevTarget.angleTo(_target) / Math.max(dt, 1e-3);
+      const speed = _prevTarget.angleTo(_target) / dt;
       _prevTarget.copy(_target);
       const k = K_MIN + (K_MAX - K_MIN) * clamp((speed - SPEED_LOW) / (SPEED_HIGH - SPEED_LOW), 0, 1);
-      _cur.slerp(_target, 1 - Math.exp(-k * Math.max(dt, 1e-3)));
+      _cur.slerp(_target, 1 - Math.exp(-k * dt));
     }
     out.copy(_cur);
     // Rotación base de la VISTA (sobre el eje de mirada), aplicada DESPUÉS de todo
@@ -2261,7 +2419,15 @@ const Sensors = (() => {
   const _rollQ = new THREE.Quaternion();
   function setViewRoll(rad) { viewRoll = rad || 0; }
 
+  // Fija como "frente" la dirección actual (y reinicia la corrección de la brújula).
   function recenter() { headingOffset = null; }
+
+  function setCompass(on) {
+    compassEnabled = !!on;
+    storageSet('rvr_compass', compassEnabled ? '1' : '0');
+    resetCompass();
+    return compassEnabled;
+  }
 
   function toggleOrientSign() {
     orientSign *= -1;
@@ -2335,6 +2501,9 @@ const Sensors = (() => {
   return {
     enable,
     recenter,
+    recenterWhenStable,
+    cancelRecenterWhenStable,
+    setCompass,
     setViewRoll,
     toggleOrientSign,
     orientationInto,
@@ -2344,6 +2513,10 @@ const Sensors = (() => {
     get supported() { return 'DeviceOrientationEvent' in window; },
     get orientSign() { return orientSign; },
     get viewRoll() { return viewRoll; },
+    get compassEnabled() { return compassEnabled; },
+    get compassLive() { return compassLive; },                       // ¿la brújula está corrigiendo ahora mismo?
+    get hasCompass() { return evAbs !== null && performance.now() - evAbsAt < 3000; },
+    get driftCorrectionDeg() { return yawBias / DEG; },              // cuánto se ha corregido el yaw (grados)
     get stepCount() { return stepCount; },
     get walkingEnabled() { return walkingEnabled; }
   };
@@ -2433,12 +2606,12 @@ const HandOverlay = (() => {
   }
   const state = { left: makeState(), right: makeState() };
 
+  // Mismo tamaño que el lienzo 3D (World.viewSize), para que las manos caigan donde cae el render.
   function resize() {
     dpr = Math.min(window.devicePixelRatio || 1, 1.5);   // el trazo es fino: no hace falta más resolución
-    W = window.innerWidth; H = window.innerHeight;
+    W = World.viewSize.w; H = World.viewSize.h;
     canvas.width = Math.round(W * dpr); canvas.height = Math.round(H * dpr);
   }
-  window.addEventListener('resize', resize);
   resize();
 
   function dist(a, b) { return Math.hypot(a.x - b.x, a.y - b.y); }
@@ -2446,9 +2619,9 @@ const HandOverlay = (() => {
   // Proyecta los puntos de una mano (coordenadas normalizadas de la cámara) a
   // píxeles de la mitad/pantalla activa y calcula los punteros (NDC).
   function update(hands, imageAspect, stereo) {
-    if (W !== window.innerWidth || H !== window.innerHeight) resize();
+    if (W !== World.viewSize.w || H !== World.viewSize.h) resize();
     view.stereo = stereo;
-    view.vw = stereo ? W / 2 : W;
+    view.vw = stereo ? Math.floor(W / 2) : W;               // la MISMA mitad entera que usa el render estéreo
     view.vh = H;
     view.aspect = view.vh > 0 ? view.vw / view.vh : 1;
     const U = Math.min(view.vw, view.vh);
@@ -2579,7 +2752,7 @@ const HandOverlay = (() => {
     octx.clearRect(0, 0, off.width, off.height);
     for (const st of hands) drawHandShape(st);
 
-    const copies = view.stereo ? [0, view.vw] : [0];
+    const copies = view.stereo ? [0, W - view.vw] : [0];   // ojo derecho: pegado al borde derecho
     for (const ox of copies) {
       ctx.setTransform(1, 0, 0, 1, 0, 0);
       ctx.drawImage(off, Math.round(ox * dpr), 0);
@@ -2592,6 +2765,157 @@ const HandOverlay = (() => {
 })();
 
 window.HandOverlay = HandOverlay;
+
+</script>
+<script>
+/* ===== cartoon.js ===== */
+/* ============================================================
+   CARTOON.JS — Efecto "cartoon" (posterizado + contornos), por vista
+   ============================================================
+   Efecto opcional (apagado por defecto: cuesta rendimiento) pensado desde el
+   principio para funcionar CON la vista dividida del Modo Cartón.
+
+   POR QUÉ UN EFECTO DE PANTALLA COMPLETA FALLA EN ESTÉREO (y cómo se evita):
+     Un post-proceso típico (EffectComposer) dibuja la escena en un render
+     target del tamaño del CANVAS ENTERO y luego pasa un shader por toda la
+     pantalla. Con la pantalla dividida eso se rompe de tres maneras:
+       1) los dos ojos comparten un solo cuadro y el efecto se calcula sobre la
+          unión (los bordes de un ojo "sangran" al otro en la franja central);
+       2) los shaders que normalizan con `gl_FragCoord.xy / resolution` usan la
+          resolución de la PANTALLA completa, pero cada ojo es solo una mitad:
+          la imagen sale estirada o desplazada;
+       3) el tamaño del texel (1/ancho) del filtro de contornos no coincide con
+          el render target real y los bordes salen mal.
+     Aquí el efecto se aplica POR OJO, en este orden:
+       a) se dibuja el ojo en un render target del tamaño EXACTO de ese ojo
+          (ancho de mitad × alto, en píxeles reales);
+       b) se pasa el shader leyendo SOLO ese render target (coordenadas `vUv`
+          locales 0..1, nunca `gl_FragCoord`) y con el texel de ESE target;
+       c) el resultado se copia a la pantalla con viewport y scissor limitados
+          al rectángulo del ojo (así no puede invadir la otra mitad).
+     En vista normal es lo mismo con un solo rectángulo del tamaño de la pantalla.
+
+   El render target no pasa por el tono/ColorSpace de salida de three.js (solo
+   lo hace el framebuffer de pantalla), así que el shader final aplica tone
+   mapping y conversión sRGB con los mismos "chunks" de three.js: los colores
+   se ven igual que sin efecto.
+   ============================================================ */
+
+const Cartoon = (() => {
+  const { renderer, IS_MOBILE } = World;
+  const KEY = 'rvr_cartoon';
+  function storageGet() { try { return localStorage.getItem(KEY); } catch (_) { return null; } }
+
+  let enabled = storageGet() === '1' || /[?&]cartoon\b/.test(location.search);
+  let rt = null;
+
+  const vertexShader = `
+    varying vec2 vUv;
+    void main() {
+      vUv = uv;
+      gl_Position = vec4(position.xy, 0.0, 1.0);   // cuadrado que cubre TODO el rectángulo del ojo
+    }`;
+
+  const fragmentShader = `
+    uniform sampler2D tDiffuse;
+    uniform vec2 texel;          // 1 / tamaño del render target DE ESTE OJO (no de la pantalla)
+    uniform float levels;        // niveles de luminosidad del posterizado
+    uniform float edgeStrength;  // 0 = sin contornos
+    varying vec2 vUv;
+
+    float lum(vec3 c) { return dot(c, vec3(0.299, 0.587, 0.114)); }
+
+    void main() {
+      vec3 c = texture2D(tDiffuse, vUv).rgb;
+
+      // Contornos: Sobel sobre la luminosidad (8 lecturas)
+      float tl = lum(texture2D(tDiffuse, vUv + texel * vec2(-1.0,  1.0)).rgb);
+      float tc = lum(texture2D(tDiffuse, vUv + texel * vec2( 0.0,  1.0)).rgb);
+      float tr = lum(texture2D(tDiffuse, vUv + texel * vec2( 1.0,  1.0)).rgb);
+      float ml = lum(texture2D(tDiffuse, vUv + texel * vec2(-1.0,  0.0)).rgb);
+      float mr = lum(texture2D(tDiffuse, vUv + texel * vec2( 1.0,  0.0)).rgb);
+      float bl = lum(texture2D(tDiffuse, vUv + texel * vec2(-1.0, -1.0)).rgb);
+      float bc = lum(texture2D(tDiffuse, vUv + texel * vec2( 0.0, -1.0)).rgb);
+      float br = lum(texture2D(tDiffuse, vUv + texel * vec2( 1.0, -1.0)).rgb);
+      float gx = (tr + 2.0 * mr + br) - (tl + 2.0 * ml + bl);
+      float gy = (tl + 2.0 * tc + tr) - (bl + 2.0 * bc + br);
+      float edge = smoothstep(0.14, 0.42, length(vec2(gx, gy)));
+
+      // Posterizado: se cuantiza la luminosidad y se reescala el color a ese nivel
+      float l = lum(c);
+      float lq = floor(l * levels + 0.5) / levels;
+      vec3 toon = mix(c, c * (lq / max(l, 0.001)), 0.8);
+
+      gl_FragColor = vec4(mix(toon, vec3(0.015, 0.02, 0.03), edge * edgeStrength), 1.0);
+
+      #include <tonemapping_fragment>
+      #include <colorspace_fragment>
+    }`;
+
+  const material = new THREE.ShaderMaterial({
+    uniforms: {
+      tDiffuse: { value: null },
+      texel: { value: new THREE.Vector2(1, 1) },
+      levels: { value: 5.0 },
+      edgeStrength: { value: 0.8 }
+    },
+    vertexShader, fragmentShader,
+    depthTest: false, depthWrite: false
+  });
+  const quad = new THREE.Mesh(new THREE.PlaneGeometry(2, 2), material);
+  quad.frustumCulled = false;
+  const quadScene = new THREE.Scene();
+  quadScene.add(quad);
+  const quadCam = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
+
+  function ensureTarget(pxW, pxH) {
+    if (!rt) {
+      rt = new THREE.WebGLRenderTarget(pxW, pxH, {
+        minFilter: THREE.LinearFilter, magFilter: THREE.LinearFilter,
+        depthBuffer: true, samples: IS_MOBILE ? 0 : 4   // el render target no hereda el antialias del canvas
+      });
+    } else if (rt.width !== pxW || rt.height !== pxH) {
+      rt.setSize(pxW, pxH);
+    }
+  }
+
+  // Dibuja `scene` con `camera` DENTRO del rectángulo `rect` (píxeles CSS enteros,
+  // origen abajo-izquierda) pasando el efecto. `plainRender` es el render original
+  // de three.js (sin los parches de cardboard.js).
+  function renderView(plainRender, scene, camera, rect) {
+    const pr = renderer.getPixelRatio();
+    const pxW = Math.max(1, Math.round(rect.w * pr)), pxH = Math.max(1, Math.round(rect.h * pr));
+    ensureTarget(pxW, pxH);
+
+    // a) el ojo, en un render target del tamaño exacto de ese ojo
+    renderer.setRenderTarget(rt);
+    renderer.setScissorTest(false);
+    plainRender(scene, camera);
+
+    // b) + c) shader sobre ese target, volcado SOLO al rectángulo del ojo
+    renderer.setRenderTarget(null);
+    renderer.setViewport(rect.x, rect.y, rect.w, rect.h);
+    renderer.setScissor(rect.x, rect.y, rect.w, rect.h);
+    renderer.setScissorTest(true);
+    material.uniforms.tDiffuse.value = rt.texture;
+    material.uniforms.texel.value.set(1 / pxW, 1 / pxH);
+    plainRender(quadScene, quadCam);
+  }
+
+  function setEnabled(on) {
+    enabled = !!on;
+    try { localStorage.setItem(KEY, enabled ? '1' : '0'); } catch (_) { /* modo privado */ }
+    return enabled;
+  }
+
+  return {
+    renderView, setEnabled,
+    get enabled() { return enabled; },
+    get target() { return rt; }
+  };
+})();
+
+window.Cartoon = Cartoon;
 
 </script>
 <script>
@@ -3694,6 +4018,7 @@ function loop() {
   lastT = now;
   clockT += dt;
 
+  World.checkSize();
   Perf.update(rawDt);
   HandTracking.tick(dt);
   updatePlayerMovement(dt);
@@ -4098,6 +4423,11 @@ window.Guide = Guide;
         10 actualizaciones por segundo y SOLO cuando el contenido
         realmente cambió (clonar en cada cuadro costaba FPS).
 
+     5) Cada ojo se dibuja con su propia cámara y un rectángulo entero; el efecto
+        Cartoon (cartoon.js) se procesa por ojo antes de copiarlo a pantalla.
+        Doble toque = recentrar; el frente definitivo se fija al quedar el
+        celular quieto dentro de las gafas.
+
      4) Vista volteada 180°: en horizontal, el sensor de varios celulares reporta
         el aparato girado media vuelta respecto a la pantalla y la cocina se
         veía "de cabeza" (techo abajo). Al entrar se aplica una rotación base de
@@ -4199,45 +4529,77 @@ window.Guide = Guide;
   }
 
   // ══════════════════════════════════════════════════════════
-  // RENDER ESTÉREO (misma técnica que MedVR: parchar renderer.render)
+  // RENDER ESTÉREO (misma idea que MedVR: parchar renderer.render)
   // ══════════════════════════════════════════════════════════
+  // Cómo queda la pantalla: cada ojo es un RECTÁNGULO entero de `half` x `h`
+  // píxeles, el izquierdo pegado al borde izquierdo y el derecho al borde
+  // derecho. Con ancho impar sobra UNA columna al centro (se deja limpia, es el
+  // divisor); antes se usaba w/2 con decimales y los dos viewports se redondeaban
+  // por separado: a veces un ojo salía 1 px más ancho o se montaban en el centro.
+  //
+  // Cada ojo tiene su PROPIA cámara (`eyeL`/`eyeR`), copiada de la principal cada
+  // cuadro: la cámara del jugador ya no se mueve ni cambia de aspecto mientras se
+  // dibuja (antes se le sumaba y restaba la separación de los ojos, y si algo
+  // fallaba en medio quedaba descentrada). Los dos ojos usan el mismo frustum
+  // simétrico con aspecto half/h y cámaras PARALELAS separadas EYE_SEP: lo
+  // correcto para gafas de cartón, donde la pantalla está "en el infinito".
+  //
+  // El efecto Cartoon (cartoon.js), si está activo, se procesa por ojo dentro de
+  // su rectángulo antes de volcarse a pantalla.
+  const EYE_SEP = 0.032;                    // separación por ojo (mitad del promedio interpupilar humano)
+  const eyeL = new THREE.PerspectiveCamera(), eyeR = new THREE.PerspectiveCamera();
+  const _eyeX = new THREE.Vector3();
+
+  function placeEye(eye, main, side, aspect) {
+    eye.fov = main.fov; eye.near = main.near; eye.far = main.far; eye.zoom = main.zoom;
+    eye.aspect = aspect;
+    eye.updateProjectionMatrix();
+    eye.quaternion.copy(main.quaternion);
+    _eyeX.set(1, 0, 0).applyQuaternion(main.quaternion);          // "derecha" de la cámara (ya incluye el giro de vista)
+    eye.position.copy(main.position).addScaledVector(_eyeX, side * EYE_SEP);
+    eye.updateMatrixWorld(true);
+  }
+
   function installStereoRenderer() {
     if (stereoInstalled) return;
     stereoInstalled = true;
     const originalRender = renderer.render.bind(renderer);
-    const EYE_SEP = 0.032; // separación por ojo (mitad del promedio interpupilar humano)
-    const localX = new THREE.Vector3();
+
+    function drawView(scene, camObj, rect) {
+      if (Cartoon.enabled) { Cartoon.renderView(originalRender, scene, camObj, rect); return; }
+      renderer.setViewport(rect.x, rect.y, rect.w, rect.h);
+      renderer.setScissor(rect.x, rect.y, rect.w, rect.h);
+      renderer.setScissorTest(true);
+      originalRender(scene, camObj);
+    }
 
     renderer.render = function (scene, cam) {
-      if (!cardboardMode || !cam.isPerspectiveCamera) { originalRender(scene, cam); return; }
-
-      const w = renderer.domElement.clientWidth, h = renderer.domElement.clientHeight;
-      const halfW = w / 2;
-      const prevAspect = cam.aspect;
-      cam.aspect = halfW / h;
-      cam.updateProjectionMatrix();
-      localX.set(1, 0, 0).applyQuaternion(cam.quaternion);
-
-      renderer.setScissorTest(true);
-      // ojo izquierdo
-      cam.position.addScaledVector(localX, -EYE_SEP);
-      cam.updateMatrixWorld(true);
-      renderer.setViewport(0, 0, halfW, h); renderer.setScissor(0, 0, halfW, h);
-      originalRender(scene, cam);
-      // ojo derecho
-      cam.position.addScaledVector(localX, EYE_SEP * 2);
-      cam.updateMatrixWorld(true);
-      renderer.setViewport(halfW, 0, halfW, h); renderer.setScissor(halfW, 0, halfW, h);
-      originalRender(scene, cam);
-      // restablecer cámara y viewport a estado normal
-      cam.position.addScaledVector(localX, -EYE_SEP);
-      cam.updateMatrixWorld(true);
-      renderer.setScissorTest(false);
-      renderer.setViewport(0, 0, w, h);
-      cam.aspect = prevAspect;
-      cam.updateProjectionMatrix();
+      // Solo se interviene el dibujo de la cámara principal y solo si hace falta.
+      if (cam !== World.camera || (!cardboardMode && !Cartoon.enabled)) { originalRender(scene, cam); return; }
+      const w = World.viewSize.w, h = World.viewSize.h;
+      try {
+        renderer.setRenderTarget(null);
+        renderer.setScissorTest(false);
+        renderer.setViewport(0, 0, w, h);
+        renderer.clear();                                           // incluye la franja central y cualquier resto del cuadro anterior
+        if (cardboardMode) {
+          const half = Math.floor(w / 2);
+          placeEye(eyeL, cam, -1, half / h);
+          placeEye(eyeR, cam, +1, half / h);
+          drawView(scene, eyeL, { x: 0, y: 0, w: half, h });
+          drawView(scene, eyeR, { x: w - half, y: 0, w: half, h });
+        } else {
+          drawView(scene, cam, { x: 0, y: 0, w, h });
+        }
+      } finally {
+        // pase lo que pase, el renderer queda en estado normal
+        renderer.setRenderTarget(null);
+        renderer.setScissorTest(false);
+        renderer.setViewport(0, 0, w, h);
+      }
     };
   }
+  installStereoRenderer();
 
   // ══════════════════════════════════════════════════════════
   // ENTRAR / SALIR DEL MODO CARTÓN
@@ -4249,8 +4611,7 @@ window.Guide = Guide;
 
   function enterCardboard() {
     Sensors.enable().then(ok => {
-      installStereoRenderer();
-      Sensors.recenter();           // el frente es hacia donde ya estabas mirando
+      Sensors.recenter();           // frente PROVISIONAL: hacia donde miras ahora
       cardboardMode = true;
       applyFlip();
       Perf.setCap(CARDBOARD_PIXEL_CAP);
@@ -4260,13 +4621,19 @@ window.Guide = Guide;
       if (el.requestFullscreen) el.requestFullscreen().catch(() => {});
       if (screen.orientation && screen.orientation.lock) screen.orientation.lock('landscape').catch(() => {});
       if (Game.showToast) Game.showToast(ok
-        ? '🥽 Modo Cartón activo — coloca el celular en las gafas y camina para avanzar.'
+        ? '🥽 Modo Cartón activo — pon el celular en las gafas y quédate quieto: la vista se centra sola.'
         : '🥽 Modo Cartón activo (sin sensores: usa ←→ ↑↓ para mirar y WASD para moverte).');
+      // El frente DEFINITIVO se fija cuando el celular ya está quieto y a nivel dentro
+      // del visor (antes se fijaba al tocar el botón, con el celular todavía en la mano).
+      if (ok) Sensors.recenterWhenStable(stable => {
+        if (Game.showToast) Game.showToast(stable ? '🧭 Vista centrada. Doble toque = recentrar.' : '🧭 Vista centrada (no se detectó quietud).');
+      });
     });
   }
 
   function exitCardboard() {
     cardboardMode = false;
+    Sensors.cancelRecenterWhenStable();
     applyFlip();
     Perf.setCap(null);
     document.body.classList.remove('cardboard-on');
@@ -4279,6 +4646,42 @@ window.Guide = Guide;
   document.getElementById('cardboard-btn').addEventListener('click', enterCardboard);
   document.querySelectorAll('#cardboard-exit .btn-exit').forEach(b => b.addEventListener('click', exitCardboard));
   document.querySelectorAll('#cardboard-exit .btn-flip').forEach(b => b.addEventListener('click', toggleFlip));
+  // Doble toque en cualquier parte (no en un botón) = recentrar. Las gafas con
+  // botón conductivo (Cardboard v2) lo permiten sin sacar el celular.
+  let lastTap = { t: 0, x: 0, y: 0 };
+  document.addEventListener('pointerdown', (e) => {
+    if (!cardboardMode || (e.target.closest && e.target.closest('button'))) return;
+    const now = performance.now();
+    if (now - lastTap.t < 450 && Math.hypot(e.clientX - lastTap.x, e.clientY - lastTap.y) < 60) {
+      Sensors.recenter(); lastTap.t = 0;
+      if (Game.showToast) Game.showToast('🧭 Vista recentrada.');
+    } else {
+      lastTap = { t: now, x: e.clientX, y: e.clientY };
+    }
+  });
+
+  // Efecto Cartoon (apagado por defecto) y corrección de deriva con la brújula.
+  function paintToggles() {
+    document.querySelectorAll('.btn-cartoon, #cartoon-btn').forEach(b => b.classList.toggle('on', Cartoon.enabled));
+    const c = document.getElementById('compass-btn');
+    if (c) c.classList.toggle('on', Sensors.compassEnabled);
+  }
+  function toggleCartoon() {
+    Cartoon.setEnabled(!Cartoon.enabled);
+    paintToggles();
+    if (Game.showToast) Game.showToast('🎨 Cartoon: ' + (Cartoon.enabled ? 'activado (si baja el rendimiento, desactívalo)' : 'desactivado'));
+  }
+  function toggleCompass() {
+    const on = Sensors.setCompass(!Sensors.compassEnabled);
+    paintToggles();
+    if (Game.showToast) Game.showToast(!on ? '🧭 Brújula desactivada (la vista puede derivar con los minutos).'
+      : (Sensors.hasCompass ? '🧭 Brújula activada: corrige la deriva poco a poco.' : '🧭 Brújula activada, pero este navegador no entrega datos de brújula.'));
+  }
+  document.querySelectorAll('.btn-cartoon').forEach(b => b.addEventListener('click', toggleCartoon));
+  const cartoonBtn = document.getElementById('cartoon-btn'); if (cartoonBtn) cartoonBtn.addEventListener('click', toggleCartoon);
+  const compassBtn = document.getElementById('compass-btn'); if (compassBtn) compassBtn.addEventListener('click', toggleCompass);
+  paintToggles();
+
   document.getElementById('invert-gyro-btn').addEventListener('click', () => {
     const sign = Sensors.toggleOrientSign();
     if (Game.showToast) Game.showToast('↔ Giro de cabeza: ' + (sign < 0 ? 'invertido' : 'normal') + ' — prueba mover la cabeza de nuevo');
